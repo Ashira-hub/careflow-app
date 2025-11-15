@@ -8,7 +8,6 @@ const GREEN = '#10B981';
 const BORDER = '#E5E7EB';
 const MUTED = '#6B7280';
 const CARD_BG = '#F9FAFB';
-const API_BASE = 'https://capstone-production-8af8.up.railway.app';
 
 type Rx = {
   id: string;
@@ -31,21 +30,6 @@ export default function PharmacyPrescription() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [avatarUri, setAvatarUri] = useState<string | undefined>(undefined);
 
-  const getAuthHeaders = React.useCallback(async () => {
-    try {
-      const raw = await AsyncStorage.getItem('session');
-      const base = { 'Content-Type': 'application/json' } as Record<string, string>;
-      if (!raw) return base;
-      const sess = raw ? JSON.parse(raw) : null;
-      const token = sess?.token || sess?.user?.token || sess?.accessToken;
-      const userId = sess?.user?.id || sess?.id || sess?.user_id || sess?.uid;
-      const withAuth = token ? { ...base, Authorization: `Bearer ${token}` } : base;
-      return userId ? { ...withAuth, 'X-User-Id': String(userId) } : withAuth;
-    } catch {
-      return { 'Content-Type': 'application/json' };
-    }
-  }, []);
-
   const filtered = useMemo(() => {
     return items.filter((i) => {
       const t = query.trim().toLowerCase();
@@ -62,54 +46,22 @@ export default function PharmacyPrescription() {
   useFocusEffect(React.useCallback(() => {
     (async () => {
       try {
-        // Try to load prescriptions from backend PostgreSQL table first
-        let backendItems: Rx[] = [];
-        try {
-          const headers = await getAuthHeaders();
-          const res = await fetch(`${API_BASE}/api/prescription`, { headers });
-          if (res.ok) {
-            const rows = await res.json();
-            backendItems = Array.isArray(rows)
-              ? rows
-                  .map((r: any) => ({
-                    id: String(r.id ?? Date.now()),
-                    patient: String(r.patient_name || r.patient || ''),
-                    medicine: String(r.medicine ?? ''),
-                    quantity: Number(r.quantity ?? 0),
-                    dosage: String(r.dosage_strength || r.dosage || ''),
-                    notes: String(r.description || ''),
-                    // Backend table currently has no explicit status; treat as 'new' for listing
-                    status: 'new' as const,
-                  }))
-                  .filter((r: Rx) => r.patient && r.medicine)
-              : [];
-          }
-        } catch {}
-
-        // Fallback: load from local AsyncStorage if backend not available or empty
-        if (!Array.isArray(backendItems) || backendItems.length === 0) {
-          try {
-            const raw = await AsyncStorage.getItem('prescriptions');
-            const stored = raw ? JSON.parse(raw) : [];
-            backendItems = Array.isArray(stored)
-              ? stored
-                  .map((r: any) => ({
-                    id: String(r.id ?? Date.now()),
-                    patient: String(r.patient ?? ''),
-                    medicine: String(r.medicine ?? ''),
-                    quantity: Number(r.quantity ?? 0),
-                    dosage: String(r.dosage ?? ''),
-                    notes: String(r.notes ?? ''),
-                    status: (r.status as 'new' | 'accepted' | 'dispensed') ?? 'new',
-                  }))
-                  .filter((r: any) => r.patient && r.medicine)
-              : [];
-          } catch {
-            backendItems = [];
-          }
-        }
-
-        setItems(backendItems);
+        const raw = await AsyncStorage.getItem('prescriptions');
+        const stored = raw ? JSON.parse(raw) : [];
+        const valid = Array.isArray(stored)
+          ? stored
+              .map((r: any) => ({
+                id: String(r.id ?? Date.now()),
+                patient: String(r.patient ?? ''),
+                medicine: String(r.medicine ?? ''),
+                quantity: Number(r.quantity ?? 0),
+                dosage: String(r.dosage ?? ''),
+                notes: String(r.notes ?? ''),
+                status: (r.status as 'new' | 'accepted' | 'dispensed') ?? 'new',
+              }))
+              .filter((r: any) => r.patient && r.medicine)
+          : [];
+        setItems(valid);
       } catch {
         setItems([]);
       }
@@ -137,7 +89,7 @@ export default function PharmacyPrescription() {
       } catch {}
     })();
     return () => {};
-  }, [getAuthHeaders]));
+  }, []));
 
   return (
     <SafeAreaView style={styles.safe}>
