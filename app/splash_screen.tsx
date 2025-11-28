@@ -4,13 +4,7 @@
  */
 
 import React from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  Image,
-  StyleSheet,
-} from 'react-native';
+import { View, Text, TouchableOpacity, Image, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -32,23 +26,8 @@ export default function SplashScreen({ navigation }: Props) {
         const session = JSON.parse(raw || '{}');
         const role = (session?.role || '').toLowerCase();
         switch (role) {
-          case 'admin':
-            navigation.replace('AdminDashboard' as any);
-            return;
           case 'doctor':
             navigation.replace('DoctorDashboard' as any);
-            return;
-          case 'nurse':
-            navigation.replace('NurseDashboard' as any);
-            return;
-          case 'pharmacist':
-            navigation.replace('PharmacyDashboard' as any);
-            return;
-          case 'supervisor':
-            navigation.replace('SupervisorDashboard' as any);
-            return;
-          case 'labstaff':
-            navigation.replace('LabDashboard' as any);
             return;
           default:
             return;

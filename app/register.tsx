@@ -34,51 +34,96 @@ export default function RegisterScreen({ navigation }: Props) {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
-  const roles = useMemo(() => ['Nurse', 'Doctor', 'Pharmacist', 'Supervisor', 'Lab Staff'], []);
+  const roles = useMemo(() => ['Doctor', 'Patient'], []);
 
-  const API_URL = 'https://capstone-production-8af8.up.railway.app/api/register'; // update to your backend IP if needed
+  const API_URL = 'http://localhost:3001/api/users/register'; // Update with your backend URL
 
   const toRoleValue = (label: string | null) => {
     if (!label) return null;
-    const key = label.toLowerCase().trim();
-    if (key === 'lab staff') return 'labstaff';
-    return key; // nurse, doctor, pharmacist, supervisor
+    return label.toLowerCase().trim();
   };
 
   const handleRegister = async () => {
-  if (!fullName || !role || !email || !password || !confirmPassword) {
-    Alert.alert('Validation', 'Please fill out all fields.');
-    return;
-  }
-
-  try {
-    const res = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fullName, role: toRoleValue(role), email, password }),
-    });
-
-    const data = await res.json();
-
-    if (res.ok && data.success) {
-      Alert.alert('Success', 'Registration successful! Please login.');
-      navigation.replace('Login');
-    } else {
-      console.log("Server response:", data);
-      Alert.alert('Error', data.message || 'Registration failed');
+    // Basic validation
+    if (!fullName || !role || !email || !password || !confirmPassword) {
+      Alert.alert('Validation', 'Please fill out all fields.');
+      return;
     }
-  } catch (err) {
-    console.error("Network error:", err);
-    Alert.alert('Network Error', 'Unable to connect to the server.');
-  }
-};
+
+    // Email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      Alert.alert('Validation', 'Please enter a valid email address.');
+      return;
+    }
+
+    // Password validation
+    if (password.length < 6) {
+      Alert.alert('Validation', 'Password must be at least 6 characters long.');
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      Alert.alert('Validation', 'Passwords do not match.');
+      return;
+    }
+
+    try {
+      const userData = {
+        fullName,
+        email,
+        password,
+        role: toRoleValue(role),
+        status: 'active',
+        createdAt: new Date().toISOString(),
+      };
+
+      const response = await fetch(API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(userData),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        Alert.alert(
+          'Success',
+          'Registration successful! Please log in with your credentials.',
+          [
+            {
+              text: 'OK',
+              onPress: () => navigation.replace('Login'),
+            },
+          ],
+        );
+      } else {
+        // Handle specific error messages from the server
+        const errorMessage =
+          data.message || 'Registration failed. Please try again.';
+        Alert.alert('Registration Failed', errorMessage);
+      }
+    } catch (error) {
+      console.error('Registration error:', error);
+      Alert.alert(
+        'Error',
+        'Unable to connect to the server. Please check your internet connection and try again.',
+      );
+    }
+  };
 
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: '#FFFFFF' }}
       behavior={Platform.select({ ios: 'padding', android: undefined })}
     >
-      <ScrollView contentContainerStyle={[styles.scroll, { paddingTop: insets.top }]} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top }]}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.container}>
           <Image
             source={require('../assets/applogo.png')}
@@ -87,7 +132,9 @@ export default function RegisterScreen({ navigation }: Props) {
           />
 
           <Text style={styles.title}>Create an Account</Text>
-          <Text style={styles.subtitle}>Register now to get started with an account</Text>
+          <Text style={styles.subtitle}>
+            Register now to get started with an account
+          </Text>
 
           <View style={styles.fieldBlock}>
             <Text style={styles.label}>Full Name</Text>
@@ -102,8 +149,13 @@ export default function RegisterScreen({ navigation }: Props) {
 
           <View style={styles.fieldBlock}>
             <Text style={styles.label}>Role</Text>
-            <Pressable style={[styles.input, styles.select]} onPress={() => setRoleOpen(!roleOpen)}>
-              <Text style={[styles.selectText, { color: role ? TEXT : '#9CA3AF' }]}>
+            <Pressable
+              style={[styles.input, styles.select]}
+              onPress={() => setRoleOpen(!roleOpen)}
+            >
+              <Text
+                style={[styles.selectText, { color: role ? TEXT : '#9CA3AF' }]}
+              >
                 {role ?? 'Select your role'}
               </Text>
               <Image
@@ -114,7 +166,7 @@ export default function RegisterScreen({ navigation }: Props) {
             </Pressable>
             {roleOpen && (
               <View style={styles.selectMenu}>
-                {roles.map((r) => (
+                {roles.map(r => (
                   <Pressable
                     key={r}
                     style={styles.selectItem}
@@ -154,9 +206,16 @@ export default function RegisterScreen({ navigation }: Props) {
                 value={password}
                 onChangeText={setPassword}
               />
-              <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowPassword(!showPassword)}>
+              <TouchableOpacity
+                style={styles.eyeBtn}
+                onPress={() => setShowPassword(!showPassword)}
+              >
                 <Image
-                  source={showPassword ? require('../assets/hidepass.png') : require('../assets/showpass.png')}
+                  source={
+                    showPassword
+                      ? require('../assets/hidepass.png')
+                      : require('../assets/showpass.png')
+                  }
                   style={styles.eyeIcon}
                   resizeMode="contain"
                 />
@@ -175,9 +234,16 @@ export default function RegisterScreen({ navigation }: Props) {
                 value={confirmPassword}
                 onChangeText={setConfirmPassword}
               />
-              <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowConfirm(!showConfirm)}>
+              <TouchableOpacity
+                style={styles.eyeBtn}
+                onPress={() => setShowConfirm(!showConfirm)}
+              >
                 <Image
-                  source={showConfirm ? require('../assets/hidepass.png') : require('../assets/showpass.png')}
+                  source={
+                    showConfirm
+                      ? require('../assets/hidepass.png')
+                      : require('../assets/showpass.png')
+                  }
                   style={styles.eyeIcon}
                   resizeMode="contain"
                 />
@@ -185,7 +251,11 @@ export default function RegisterScreen({ navigation }: Props) {
             </View>
           </View>
 
-          <TouchableOpacity style={styles.registerBtn} activeOpacity={0.9} onPress={handleRegister}>
+          <TouchableOpacity
+            style={styles.registerBtn}
+            activeOpacity={0.9}
+            onPress={handleRegister}
+          >
             <Text style={styles.registerText}>REGISTER</Text>
           </TouchableOpacity>
 
@@ -342,4 +412,3 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
-

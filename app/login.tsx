@@ -20,12 +20,8 @@ type RootStackParamList = {
   Splash: undefined;
   Login: undefined;
   Register: undefined;
-  AdminDashboard: undefined;
   DoctorDashboard: undefined;
-  NurseDashboard: undefined;
-  PharmacyDashboard: undefined;
-  SupervisorDashboard: undefined;
-  LabDashboard: undefined;
+  PatientDashboard: undefined;
   UserDashboard: undefined;
 };
 
@@ -54,45 +50,10 @@ export default function LoginScreen({ navigation }: Props) {
   }, []);
 
   const API_URL = 'https://capstone-production-8af8.up.railway.app/api/login'; // your backend IP
-  const DEFAULT_ADMIN_EMAIL = 'admin@gmail.com';
-  const DEFAULT_ADMIN_PASSWORD = 'Admin123';
 
   const handleLogin = async () => {
     if (!email || !password) {
       Alert.alert('Error', 'Please enter both email and password.');
-      return;
-    }
-
-    if (email.toLowerCase() === DEFAULT_ADMIN_EMAIL && password === DEFAULT_ADMIN_PASSWORD) {
-      try {
-        // Load any cached admin profile to preserve avatar/info across sessions
-        let cached: any = null;
-        try { const rawC = await AsyncStorage.getItem('admin_profile_cache'); if (rawC) cached = JSON.parse(rawC); } catch {}
-        const baseUser = { email: DEFAULT_ADMIN_EMAIL, role: 'admin', name: 'Administrator' } as any;
-        const user = cached ? { ...baseUser, ...cached, email: cached.email || baseUser.email, role: 'admin' } : baseUser;
-        await AsyncStorage.setItem('session', JSON.stringify({ role: 'admin', user }));
-        try {
-          if (remember) {
-            await AsyncStorage.setItem('remember_me', '1');
-            await AsyncStorage.setItem('remember_email', email);
-            await AsyncStorage.setItem('remember_password', password);
-          } else {
-            await AsyncStorage.removeItem('remember_me');
-            await AsyncStorage.removeItem('remember_email');
-            await AsyncStorage.removeItem('remember_password');
-          }
-        } catch {}
-        try {
-          const rawN = await AsyncStorage.getItem('admin_notifications');
-          const arrN = rawN ? JSON.parse(rawN) : [];
-          const notif = { id: `ADMIN-LOGIN-${Date.now()}`, title: 'Logged In', message: `Welcome back, ${DEFAULT_ADMIN_EMAIL}`, timestamp: Date.now(), read: false } as any;
-          await AsyncStorage.setItem('admin_notifications', JSON.stringify([notif, ...(Array.isArray(arrN) ? arrN : [])]));
-        } catch {}
-      } catch (e) {}
-      try {
-        await AsyncStorage.setItem('welcome_pending_message', `Welcome back, Administrator!`);
-      } catch {}
-      navigation.replace('AdminDashboard');
       return;
     }
 
@@ -108,15 +69,24 @@ export default function LoginScreen({ navigation }: Props) {
       if (data.success) {
         const role = data.user.role.toLowerCase();
         try {
-          await AsyncStorage.setItem('session', JSON.stringify({ role, user: data.user }));
+          await AsyncStorage.setItem(
+            'session',
+            JSON.stringify({ role, user: data.user }),
+          );
         } catch (e) {
           // ignore storage errors
         }
         // Set a role-agnostic welcome banner message for the next screen
         try {
           const u = (data?.user || {}) as any;
-          const displayName = (u.full_name || u.name || u.email || 'user') as string;
-          await AsyncStorage.setItem('welcome_pending_message', `Welcome back, ${displayName}!`);
+          const displayName = (u.full_name ||
+            u.name ||
+            u.email ||
+            'user') as string;
+          await AsyncStorage.setItem(
+            'welcome_pending_message',
+            `Welcome back, ${displayName}!`,
+          );
         } catch {}
         try {
           if (remember) {
@@ -131,50 +101,11 @@ export default function LoginScreen({ navigation }: Props) {
         } catch {}
 
         switch (role) {
-          case 'admin':
-            try {
-              const rawN = await AsyncStorage.getItem('admin_notifications');
-              const arrN = rawN ? JSON.parse(rawN) : [];
-              const notif = { id: `ADMIN-LOGIN-${Date.now()}`, title: 'Logged In', message: `Welcome back, ${data.user?.email || 'admin'}`, timestamp: Date.now(), read: false } as any;
-              await AsyncStorage.setItem('admin_notifications', JSON.stringify([notif, ...(Array.isArray(arrN) ? arrN : [])]));
-            } catch {}
-            // Merge with cached local profile to preserve avatar/info if server lacks them
-            try {
-              const rawC = await AsyncStorage.getItem('admin_profile_cache');
-              const cached = rawC ? JSON.parse(rawC) : null;
-              if (cached) {
-                const serverUser = data.user || {};
-                const merged: any = { ...cached, ...serverUser };
-                if (!serverUser.avatar_uri && cached.avatar_uri) merged.avatar_uri = cached.avatar_uri;
-                if ((!serverUser.full_name && cached.full_name) || (!serverUser.name && cached.full_name)) merged.full_name = cached.full_name;
-                if (!serverUser.phone && cached.phone) merged.phone = cached.phone;
-                if (!serverUser.address && cached.address) merged.address = cached.address;
-                if (!serverUser.birthdate && cached.birthdate) merged.birthdate = cached.birthdate;
-                if (!serverUser.gender && cached.gender) merged.gender = cached.gender;
-                await AsyncStorage.setItem('session', JSON.stringify({ role: 'admin', user: merged }));
-              }
-            } catch {}
-            try {
-              const u = (data?.user || {}) as any;
-              const displayName = (u.full_name || u.name || u.email || 'admin') as string;
-              await AsyncStorage.setItem('welcome_pending_message', `Welcome back, ${displayName}!`);
-            } catch {}
-            navigation.replace('AdminDashboard');
-            break;
           case 'doctor':
             navigation.replace('DoctorDashboard');
             break;
-          case 'nurse':
-            navigation.replace('NurseDashboard');
-            break;
-          case 'pharmacist':
-            navigation.reset({ index: 0, routes: [{ name: 'PharmacyDashboard' as never }] });
-            break;
-          case 'supervisor':
-            navigation.replace('SupervisorDashboard');
-            break;
-          case 'labstaff':
-            navigation.replace('LabDashboard');
+          case 'patient':
+            navigation.replace('PatientDashboard');
             break;
           default:
             navigation.replace('UserDashboard');
@@ -193,7 +124,10 @@ export default function LoginScreen({ navigation }: Props) {
       style={{ flex: 1, backgroundColor: '#FFFFFF' }}
       behavior={Platform.select({ ios: 'padding', android: undefined })}
     >
-      <ScrollView contentContainerStyle={[styles.scroll, { paddingTop: insets.top }] } keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top }]}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.container}>
           <Image
             source={require('../assets/applogo.png')}
@@ -201,7 +135,9 @@ export default function LoginScreen({ navigation }: Props) {
             resizeMode="contain"
           />
           <Text style={styles.title}>Login to your Account</Text>
-          <Text style={styles.subtitle}>Welcome back, please enter your details</Text>
+          <Text style={styles.subtitle}>
+            Welcome back, please enter your details
+          </Text>
 
           <View style={styles.fieldBlock}>
             <Text style={styles.label}>Email Address</Text>
@@ -227,7 +163,10 @@ export default function LoginScreen({ navigation }: Props) {
                 value={password}
                 onChangeText={setPassword}
               />
-              <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowPassword(!showPassword)}>
+              <TouchableOpacity
+                style={styles.eyeBtn}
+                onPress={() => setShowPassword(!showPassword)}
+              >
                 <Image
                   source={
                     showPassword
@@ -241,14 +180,21 @@ export default function LoginScreen({ navigation }: Props) {
             </View>
           </View>
 
-          <Pressable style={styles.rememberRow} onPress={() => setRemember(!remember)}>
+          <Pressable
+            style={styles.rememberRow}
+            onPress={() => setRemember(!remember)}
+          >
             <View style={[styles.checkbox, remember && styles.checkboxChecked]}>
               {remember && <Text style={styles.checkboxTick}>✓</Text>}
             </View>
             <Text style={styles.rememberText}>Remember me</Text>
           </Pressable>
 
-          <TouchableOpacity style={styles.loginBtn} activeOpacity={0.9} onPress={handleLogin}>
+          <TouchableOpacity
+            style={styles.loginBtn}
+            activeOpacity={0.9}
+            onPress={handleLogin}
+          >
             <Text style={styles.loginText}>LOGIN</Text>
           </TouchableOpacity>
 
@@ -405,4 +351,3 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
-

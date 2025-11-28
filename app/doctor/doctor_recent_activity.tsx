@@ -1,5 +1,13 @@
 import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, FlatList, TouchableOpacity, Image } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  SafeAreaView,
+  FlatList,
+  TouchableOpacity,
+  Image,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 
@@ -8,11 +16,36 @@ const BORDER = '#E5E7EB';
 const MUTED = '#6B7280';
 
 const DATA = [
-  { id: '1', type: 'appointment', title: 'Appointment with John Doe', time: 'Today • 2:00 PM' },
-  { id: '2', type: 'prescription', title: 'Prescription updated for Jane', time: 'Yesterday • 4:45 PM' },
-  { id: '3', type: 'report', title: 'Report generated: CBC', time: 'Oct 10 • 9:15 AM' },
-  { id: '4', type: 'appointment', title: 'Appointment with Mark Spencer', time: 'Oct 9 • 11:00 AM' },
-  { id: '5', type: 'prescription', title: 'New prescription for Lily', time: 'Oct 9 • 9:20 AM' },
+  {
+    id: '1',
+    type: 'appointment',
+    title: 'Appointment with John Doe',
+    time: 'Today • 2:00 PM',
+  },
+  {
+    id: '2',
+    type: 'prescription',
+    title: 'Prescription updated for Jane',
+    time: 'Yesterday • 4:45 PM',
+  },
+  {
+    id: '3',
+    type: 'report',
+    title: 'Report generated: CBC',
+    time: 'Oct 10 • 9:15 AM',
+  },
+  {
+    id: '4',
+    type: 'appointment',
+    title: 'Appointment with Mark Spencer',
+    time: 'Oct 9 • 11:00 AM',
+  },
+  {
+    id: '5',
+    type: 'prescription',
+    title: 'New prescription for Lily',
+    time: 'Oct 9 • 9:20 AM',
+  },
 ];
 
 export default function DoctorRecentActivity() {
@@ -33,8 +66,11 @@ export default function DoctorRecentActivity() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <View style={[styles.header, { paddingTop: insets.top }]}> 
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+      <View style={[styles.header, { paddingTop: insets.top }]}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.backBtn}
+        >
           <Text style={styles.backText}>{'<'} Back</Text>
         </TouchableOpacity>
         <Text style={styles.title}>Recent Activity</Text>
@@ -45,14 +81,20 @@ export default function DoctorRecentActivity() {
       <FlatList
         contentContainerStyle={{ padding: 16, paddingBottom: 24 }}
         data={DATA}
-        keyExtractor={(item) => item.id}
+        keyExtractor={item => item.id}
         renderItem={({ item }) => (
           <TouchableOpacity style={styles.item} activeOpacity={0.85}>
             <View style={styles.itemLeft}>
-              <Image source={iconFor(item.type)} style={styles.itemIcon} resizeMode="contain" />
+              <Image
+                source={iconFor(item.type)}
+                style={styles.itemIcon}
+                resizeMode="contain"
+              />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
+              <Text style={styles.itemTitle} numberOfLines={1}>
+                {item.title}
+              </Text>
               <Text style={styles.itemSub}>{item.time}</Text>
             </View>
           </TouchableOpacity>
