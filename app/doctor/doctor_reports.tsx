@@ -282,81 +282,64 @@ export default function DoctorReports() {
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
-          {/* Title and Month Filter */}
-          <View style={styles.titleRow}>
-            <Text style={styles.screenTitle}>Reports</Text>
-            <View style={styles.monthWrap}>
-              <TouchableOpacity
-                style={styles.monthBtn}
-                onPress={() =>
-                  setMonth(m => {
-                    const nm = (m + 11) % 12;
-                    if (m === 0) setYear(y => y - 1);
-                    return nm;
-                  })
-                }
-              >
-                <Text style={styles.monthText}>{'<'}</Text>
-              </TouchableOpacity>
-              <Text style={styles.monthLabel}>
-                {monthName(month)} {year}
-              </Text>
-              <TouchableOpacity
-                style={styles.monthBtn}
-                onPress={() =>
-                  setMonth(m => {
-                    const nm = (m + 1) % 12;
-                    if (m === 11) setYear(y => y + 1);
-                    return nm;
-                  })
-                }
-              >
-                <Text style={styles.monthText}>{'>'}</Text>
-              </TouchableOpacity>
+          {/* Analytics: Monthly Totals */}
+          <View style={[styles.sectionCard, { marginTop: 0 }]}>
+            <View style={styles.titleRow}>
+              <Text style={styles.sectionTitle}>Monthly Analytics</Text>
+              <View style={styles.monthWrap}>
+                <TouchableOpacity
+                  style={styles.monthBtn}
+                  onPress={() =>
+                    setMonth(m => {
+                      const nm = (m + 11) % 12;
+                      if (m === 0) setYear(y => y - 1);
+                      return nm;
+                    })
+                  }
+                >
+                  <Text style={styles.monthText}>{'<'}</Text>
+                </TouchableOpacity>
+                <Text style={styles.monthLabel}>
+                  {monthName(month)} {year}
+                </Text>
+                <TouchableOpacity
+                  style={styles.monthBtn}
+                  onPress={() =>
+                    setMonth(m => {
+                      const nm = (m + 1) % 12;
+                      if (m === 11) setYear(y => y + 1);
+                      return nm;
+                    })
+                  }
+                >
+                  <Text style={styles.monthText}>{'>'}</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
-
-          {/* Summary Cards */}
-          <View style={styles.cardsRow}>
-            <SummaryCard
-              label="Patients"
-              value={metrics.totalPatients}
-              tint="#D1FAE5"
-            />
-            <SummaryCard
-              label="Appointments"
-              value={metrics.totalAppointments}
-              tint="#E0E7FF"
-            />
-          </View>
-          <View style={styles.cardsRow}>
-            <SummaryCard
-              label="Prescriptions"
-              value={metrics.totalPrescriptions}
-              tint="#FEF3C7"
+            <VerticalBarChart
+              labels={['Appointments', 'Prescriptions', 'Patients']}
+              values={[
+                metrics.totalAppointments,
+                metrics.totalPrescriptions,
+                metrics.totalPatients,
+              ]}
+              colors={['#3B82F6', '#F59E0B', GREEN]}
+              height={220}
+              barWidth={34}
             />
           </View>
 
-          {/* Top Patients */}
+          {/* Analytics: Top Patients */}
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>Top Patients</Text>
             {metrics.ranking.length === 0 ? (
               <Text style={styles.empty}>No data yet.</Text>
             ) : (
-              metrics.ranking.map(p => (
-                <View key={p.id} style={styles.row}>
-                  <View style={styles.avatar}>
-                    <Text style={styles.avatarText}>{initials(p.name)}</Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.name}>{p.name}</Text>
-                    <Text style={styles.meta}>Last visit: {p.lastVisit}</Text>
-                  </View>
-                  <View style={styles.badge}>
-                    <Text style={styles.badgeText}>{p.count}</Text>
-                  </View>
-                </View>
-              ))
+              <HorizontalBarChart
+                labels={metrics.ranking.map(p => p.name)}
+                values={metrics.ranking.map(p => p.count)}
+                maxBars={5}
+              />
             )}
           </View>
         </ScrollView>
@@ -429,6 +412,145 @@ export default function DoctorReports() {
   );
 }
 
+function VerticalBarChart({
+  labels,
+  values,
+  colors,
+  height = 200,
+  barWidth = 32,
+  valueFormatter,
+}: {
+  labels: string[];
+  values: number[];
+  colors?: string[];
+  height?: number;
+  barWidth?: number;
+  valueFormatter?: (n: number) => string;
+}) {
+  const rawMax = Math.max(1, ...values);
+  // Compute a "nice" max and step for ticks (roughly 4 lines)
+  const pow10 = Math.pow(10, Math.floor(Math.log10(rawMax)));
+  const norm = rawMax / pow10;
+  const niceNorm = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+  const yMax = niceNorm * pow10;
+  const steps = 4;
+  const step = yMax / steps;
+  const ticks = Array.from({ length: steps + 1 }, (_, i) =>
+    Math.round(i * step),
+  );
+  // Leave visual headroom so value bubbles don't clip the top
+  const HEADROOM = 0.15; // 15% of the plot height
+  const scaleMax = yMax / (1 - HEADROOM);
+  const h = Math.max(120, height);
+  const fmt = valueFormatter || ((n: number) => n.toLocaleString());
+  return (
+    <View style={styles.vChart}>
+      <View style={styles.vChartRow}>
+        {/* Y Axis */}
+        <View style={[styles.yAxis, { height: h }]}>
+          {ticks
+            .slice()
+            .reverse()
+            .map((t, idx) => (
+              <Text key={idx} style={styles.yAxisLabel}>
+                {fmt(t)}
+              </Text>
+            ))}
+        </View>
+        {/* Plot */}
+        <View style={[styles.vPlot, { height: h }]}>
+          {/* Grid lines */}
+          <View style={styles.gridLayer} pointerEvents="none">
+            {ticks.map((_, i) => (
+              <View key={i} style={styles.gridLine} />
+            ))}
+          </View>
+          <View style={styles.vBarWrap}>
+            {values.map((v, i) => {
+              const hPct = Math.min(100, Math.round((v / scaleMax) * 100));
+              const c = colors?.[i] || GREEN;
+              return (
+                <View key={i} style={styles.vBarItem}>
+                  <View style={[styles.vBar, { width: barWidth }]}>
+                    <View
+                      style={[
+                        styles.vBarFill,
+                        { height: `${hPct}%`, backgroundColor: c },
+                      ]}
+                    >
+                      {v > 0 && (
+                        <Text style={styles.vBarValueInside}>{fmt(v)}</Text>
+                      )}
+                    </View>
+                  </View>
+                  <Text style={styles.vBarLabel} numberOfLines={1}>
+                    {labels[i]}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        </View>
+      </View>
+      {/* Legend */}
+      <View style={styles.legendRow}>
+        {labels.map((l, i) => (
+          <View key={i} style={styles.legendItemRow}>
+            <View
+              style={[
+                styles.legendDot,
+                { backgroundColor: colors?.[i] || GREEN },
+              ]}
+            />
+            <Text style={styles.legendLabel}>{l}</Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function HorizontalBarChart({
+  labels,
+  values,
+  maxBars = 5,
+}: {
+  labels: string[];
+  values: number[];
+  maxBars?: number;
+}) {
+  const items = labels.map((l, i) => ({ label: l, value: values[i] || 0 }));
+  const top = items
+    .slice(0, maxBars)
+    .map((x, i) => ({ ...x, color: i === 0 ? GREEN : '#34D399' }));
+  const max = Math.max(1, ...top.map(x => x.value));
+  return (
+    <View style={{ paddingVertical: 8 }}>
+      {top.map((it, idx) => {
+        const wPct = Math.round((it.value / max) * 100);
+        return (
+          <View key={idx} style={{ marginVertical: 6 }}>
+            <View style={styles.hRow}>
+              <Text style={styles.hLabel} numberOfLines={1}>
+                {it.label}
+              </Text>
+              <Text style={styles.hValue}>{it.value}</Text>
+            </View>
+            <View style={styles.hBar}>
+              <View
+                style={[
+                  styles.hBarFill,
+                  { width: `${wPct}%`, backgroundColor: it.color },
+                ]}
+              />
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 function SummaryCard({
   label,
   value,
@@ -466,7 +588,7 @@ function BottomItem({
   return (
     <TouchableOpacity
       style={styles.bottomItem}
-      activeOpacity={0.85}
+      activeOpacity={0.8}
       onPress={onPress}
     >
       <Image
@@ -505,7 +627,7 @@ function monthName(m: number) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#FFFFFF' },
-  container: { flex: 1, paddingBottom: 110 },
+  container: { flex: 1 },
 
   header: {
     flexDirection: 'row',
@@ -530,7 +652,7 @@ const styles = StyleSheet.create({
   avatarImg: { width: '100%', height: '100%' },
 
   divider: { height: 1, backgroundColor: BORDER },
-  scrollContent: { padding: 16, paddingBottom: 120 },
+  scrollContent: { padding: 16, paddingBottom: 80 },
 
   titleRow: {
     flexDirection: 'row',
@@ -542,12 +664,12 @@ const styles = StyleSheet.create({
   monthBtn: {
     paddingVertical: 4,
     paddingHorizontal: 8,
-    borderWidth: 1,
-    borderColor: GREEN,
-    borderRadius: 8,
-    backgroundColor: '#FFFFFF',
+    borderWidth: 0,
+    borderColor: 'transparent',
+    borderRadius: 0,
+    backgroundColor: 'transparent',
   },
-  monthText: { color: GREEN, fontWeight: '700' },
+  monthText: { color: '#111827', fontWeight: '700' },
   monthLabel: { color: '#111827', fontWeight: '700' },
 
   cardsRow: { flexDirection: 'row', gap: 12, marginTop: 12 },
@@ -564,7 +686,7 @@ const styles = StyleSheet.create({
     padding: 14,
     marginTop: 16,
   },
-  sectionTitle: { color: GREEN, fontWeight: '700', marginBottom: 8 },
+  sectionTitle: { color: '#111827', fontWeight: '700', marginBottom: 8 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -599,13 +721,119 @@ const styles = StyleSheet.create({
   },
   badgeText: { color: GREEN, fontWeight: '700' },
   empty: { color: MUTED, fontStyle: 'italic' },
+  // Charts
+  vChart: { paddingTop: 25 },
+  vChartRow: { flexDirection: 'row', alignItems: 'flex-end' },
+  yAxis: {
+    width: 36,
+    height: 160,
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    paddingRight: 6,
+    paddingTop: 24,
+  },
+  yAxisLabel: { color: MUTED, fontSize: 10 },
+  vPlot: { flex: 1, height: 160, position: 'relative', paddingTop: 24 },
+  gridLayer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 24,
+    bottom: 0,
+    justifyContent: 'space-between',
+  },
+  gridLine: { height: 1, backgroundColor: BORDER },
+  vBarWrap: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-around',
+    paddingTop: 8,
+    height: '100%',
+  },
+  vBarItem: { alignItems: 'center', flex: 1, paddingHorizontal: 4 },
+  vBar: {
+    height: '100%',
+    width: 30,
+    borderRadius: 6,
+    backgroundColor: '#EEF2F7',
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: BORDER,
+    justifyContent: 'flex-end',
+  },
+  vBarFill: {
+    width: '100%',
+    borderTopLeftRadius: 6,
+    borderTopRightRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  vBarLabel: { color: MUTED, fontSize: 10, marginTop: 6, textAlign: 'center' },
+  vBarValue: { color: '#111827', fontWeight: '700', fontSize: 12 },
+  vBarValueInside: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '700',
+    paddingVertical: 2,
+  },
+  vValueBubble: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: BORDER,
+    color: '#111827',
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  legendRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  legendItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 8,
+    marginTop: 4,
+  },
+  legendDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 6,
+    borderWidth: 1,
+    borderColor: BORDER,
+  },
+  legendLabel: { color: MUTED, fontSize: 12 },
+  hRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  hLabel: { color: '#111827', flex: 1, marginRight: 8 },
+  hValue: { color: GREEN, fontWeight: '700' },
+  hBar: {
+    height: 12,
+    backgroundColor: '#EEF2F7',
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 6,
+    overflow: 'hidden',
+    marginTop: 6,
+  },
+  hBarFill: {
+    height: '100%',
+    backgroundColor: GREEN,
+    borderRadius: 6,
+  },
 
   bottomBar: {
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 45,
-    height: 64,
+    bottom: 0,
+    height: 80,
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
     borderTopColor: BORDER,
@@ -614,7 +842,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   bottomItem: { alignItems: 'center', justifyContent: 'center' },
-  bottomImg: { width: 22, height: 22, marginBottom: 4 },
+  bottomImg: { width: 26, height: 26, marginBottom: 4 },
   bottomLabel: { fontSize: 10, color: MUTED },
   // Dropdown styles
   dropdownOverlay: {

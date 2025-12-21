@@ -231,6 +231,34 @@ export default function DoctorPatientRecordsDetails() {
             </View>
           </View>
         </ScrollView>
+        {/* Bottom Bar */}
+        <View style={styles.bottomBar}>
+          <BottomItem
+            label="Home"
+            source={require('../../assets/home_icon.png')}
+            onPress={() => navigation.navigate('DoctorDashboard' as never)}
+          />
+          <BottomItem
+            label="Appointment"
+            source={require('../../assets/appointment_icon.png')}
+            onPress={() => navigation.navigate('DoctorAppointment' as never)}
+          />
+          <BottomItem
+            label="Prescription"
+            source={require('../../assets/prescription_icon.png')}
+            onPress={() => navigation.navigate('DoctorPrescription' as never)}
+          />
+          <BottomItem
+            label="P-Records"
+            source={require('../../assets/patient_records_icon.png')}
+            onPress={() => navigation.navigate('DoctorPatientRecords' as never)}
+          />
+          <BottomItem
+            label="Reports"
+            source={require('../../assets/reports_icon.png')}
+            onPress={() => navigation.navigate('DoctorReports' as never)}
+          />
+        </View>
         {showProfileMenu && (
           <View style={styles.dropdownOverlay}>
             <TouchableOpacity
@@ -267,6 +295,35 @@ export default function DoctorPatientRecordsDetails() {
         )}
       </View>
     </SafeAreaView>
+  );
+}
+
+function BottomItem({
+  label,
+  active,
+  source,
+  onPress,
+}: {
+  label: string;
+  active?: boolean;
+  source: any;
+  onPress?: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={styles.bottomItem}
+      activeOpacity={0.8}
+      onPress={onPress}
+    >
+      <Image
+        source={source}
+        style={[styles.bottomImg, { tintColor: active ? GREEN : MUTED }]}
+        resizeMode="contain"
+      />
+      <Text style={[styles.bottomLabel, active && { color: GREEN }]}>
+        {label}
+      </Text>
+    </TouchableOpacity>
   );
 }
 
@@ -395,4 +452,20 @@ const styles = StyleSheet.create({
   dropdownItem: { paddingVertical: 10, paddingHorizontal: 12 },
   dropdownText: { color: '#111827', fontWeight: '700' },
   menuDivider: { height: 1, backgroundColor: BORDER },
+  bottomBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 80,
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: BORDER,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+  },
+  bottomItem: { alignItems: 'center', justifyContent: 'center' },
+  bottomImg: { width: 26, height: 26, marginBottom: 4 },
+  bottomLabel: { fontSize: 10, color: MUTED },
 });

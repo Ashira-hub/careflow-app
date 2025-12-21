@@ -56,9 +56,13 @@ export default function DoctorDashboard() {
       if (!raw) return base;
       const sess = JSON.parse(raw);
       const token = sess?.token || sess?.user?.token || sess?.accessToken;
-      return token ? { ...base, Authorization: `Bearer ${token}` } : base;
+      const userId = sess?.user?.id || sess?.id;
+      const withAuth = token
+        ? { ...base, Authorization: `Bearer ${token}` }
+        : base;
+      return userId ? { ...withAuth, 'X-User-Id': String(userId) } : withAuth;
     } catch {
-      return { 'Content-Type': 'application/json' };
+      return { 'Content-Type': 'application/json' } as Record<string, string>;
     }
   }, []);
 
@@ -117,7 +121,7 @@ export default function DoctorDashboard() {
           }
           // Patient Records count (distinct patients) via /api/patient-records
           try {
-            const res2 = await fetch(`${API_BASE}/api/patient-records`, {
+            const res2 = await fetch(`${API_BASE}/api/patient-records?own=1`, {
               headers,
             });
             if (res2.ok) {
@@ -129,14 +133,41 @@ export default function DoctorDashboard() {
           } catch {
             setPrCount(0);
           }
-          // Reports count from /api/patient-records/all (total entries)
+          // Reports + Monthly counts from /api/patient-records/all (mirror Reports screen logic)
           try {
             const res3 = await fetch(`${API_BASE}/api/patient-records/all`, {
               headers,
             });
             if (res3.ok) {
               const rows = await res3.json();
-              setReportCount(Array.isArray(rows) ? rows.length : 0);
+              const now = new Date();
+              const m = now.getMonth();
+              const y = now.getFullYear();
+              const inMonth = (ts?: number) => {
+                if (!ts) return false;
+                const d = new Date(ts);
+                return d.getMonth() === m && d.getFullYear() === y;
+              };
+              let apptM = 0;
+              let rxM = 0;
+              let totalM = 0;
+              for (const r of Array.isArray(rows) ? rows : []) {
+                const parsed = Date.parse(r?.created_at);
+                const ts = isNaN(parsed) ? Date.now() : parsed;
+                if (inMonth(ts)) {
+                  const isRx = !!(
+                    r?.medicine ||
+                    r?.dosage ||
+                    r?.dosage_strength
+                  );
+                  if (isRx) rxM += 1;
+                  else apptM += 1;
+                  totalM += 1;
+                }
+              }
+              setApptCount(apptM);
+              setRxCount(rxM);
+              setReportCount(totalM);
             } else {
               setReportCount(0);
             }
@@ -195,6 +226,17 @@ export default function DoctorDashboard() {
     },
     [],
   );
+  const timeAgo = React.useCallback((ts?: number) => {
+    if (!ts) return '';
+    const diff = Date.now() - ts;
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins} mins ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs} hour${hrs > 1 ? 's' : ''} ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days} day${days > 1 ? 's' : ''} ago`;
+  }, []);
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
@@ -289,19 +331,14 @@ export default function DoctorDashboard() {
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.title}>Doctor Dashboard</Text>
+          <Text style={styles.title}>Dashboard</Text>
           <View style={styles.sectionDivider} />
 
           <View style={styles.grid}>
             <DashboardCard
               title="Appointment"
-              icon={
-                <Image
-                  source={require('../../assets/appointment_icon.png')}
-                  style={styles.cardImg}
-                  resizeMode="contain"
-                />
-              }
+              iconSource={require('../../assets/appointment_icon.png')}
+              accentColor="#2563EB"
               count={apptCount}
               tag="Pending"
               onPress={async () => {
@@ -314,13 +351,8 @@ export default function DoctorDashboard() {
             />
             <DashboardCard
               title="Prescription"
-              icon={
-                <Image
-                  source={require('../../assets/prescription_icon.png')}
-                  style={styles.cardImg}
-                  resizeMode="contain"
-                />
-              }
+              iconSource={require('../../assets/prescription_icon.png')}
+              accentColor="#10B981"
               count={rxCount}
               tag="New"
               onPress={async () => {
@@ -333,13 +365,8 @@ export default function DoctorDashboard() {
             />
             <DashboardCard
               title="Patient Records"
-              icon={
-                <Image
-                  source={require('../../assets/patient_records_icon.png')}
-                  style={styles.cardImg}
-                  resizeMode="contain"
-                />
-              }
+              iconSource={require('../../assets/patient_records_icon.png')}
+              accentColor="#F59E0B"
               count={prCount}
               tag="Patients"
               onPress={async () => {
@@ -352,13 +379,8 @@ export default function DoctorDashboard() {
             />
             <DashboardCard
               title="Reports"
-              icon={
-                <Image
-                  source={require('../../assets/reports_icon.png')}
-                  style={styles.cardImg}
-                  resizeMode="contain"
-                />
-              }
+              iconSource={require('../../assets/reports_icon.png')}
+              accentColor="#8B5CF6"
               count={reportCount}
               tag="Entries"
               onPress={async () => {
@@ -368,7 +390,7 @@ export default function DoctorDashboard() {
             />
           </View>
 
-          <View style={styles.activityCard}>
+          <View style={[styles.activityCard, styles.cardShadow]}>
             <View style={styles.activityHeader}>
               <Text style={styles.activityTitle}>Recent Activity</Text>
               <TouchableOpacity onPress={() => setShowActivity(true)}>
@@ -385,11 +407,30 @@ export default function DoctorDashboard() {
                     : item.type === 'records'
                     ? require('../../assets/patient_records_icon.png')
                     : require('../../assets/reports_icon.png');
+                const tint =
+                  item.type === 'appointment'
+                    ? '#3B82F6'
+                    : item.type === 'prescription'
+                    ? '#10B981'
+                    : item.type === 'records'
+                    ? '#F59E0B'
+                    : '#8B5CF6';
+                const bg =
+                  item.type === 'appointment'
+                    ? '#DBEAFE'
+                    : item.type === 'prescription'
+                    ? '#DCFCE7'
+                    : item.type === 'records'
+                    ? '#FEF3C7'
+                    : '#EDE9FE';
                 const subtitle =
                   item.time ||
                   (item.timestamp
                     ? new Date(item.timestamp).toLocaleString()
                     : '');
+                const timeLabel = item.timestamp
+                  ? timeAgo(item.timestamp)
+                  : item.time || '';
                 return (
                   <TouchableOpacity
                     key={item.id || String(idx)}
@@ -397,21 +438,47 @@ export default function DoctorDashboard() {
                     activeOpacity={0.85}
                     onPress={() => setShowActivity(true)}
                   >
-                    <View style={styles.activityLeft}>
-                      <Image
-                        source={icon}
-                        style={styles.activityIcon}
-                        resizeMode="contain"
-                      />
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 10,
+                        flex: 1,
+                      }}
+                    >
+                      <View
+                        style={[
+                          styles.activityLeft,
+                          styles.activityLeftBadge,
+                          { backgroundColor: bg },
+                        ]}
+                      >
+                        <Image
+                          source={icon}
+                          style={[styles.activityIcon, { tintColor: tint }]}
+                          resizeMode="contain"
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={styles.activityItemTitle}
+                          numberOfLines={1}
+                        >
+                          {item.title}
+                        </Text>
+                        {!!subtitle && (
+                          <Text
+                            style={styles.activityItemSub}
+                            numberOfLines={1}
+                          >
+                            {subtitle}
+                          </Text>
+                        )}
+                      </View>
                     </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.activityItemTitle} numberOfLines={1}>
-                        {item.title}
-                      </Text>
-                      {!!subtitle && (
-                        <Text style={styles.activityItemSub}>{subtitle}</Text>
-                      )}
-                    </View>
+                    {!!timeLabel && (
+                      <Text style={styles.activityTime}>{timeLabel}</Text>
+                    )}
                   </TouchableOpacity>
                 );
               })}
@@ -506,31 +573,73 @@ export default function DoctorDashboard() {
                       : item.type === 'records'
                       ? require('../../assets/patient_records_icon.png')
                       : require('../../assets/reports_icon.png');
+                  const tint =
+                    item.type === 'appointment'
+                      ? '#3B82F6'
+                      : item.type === 'prescription'
+                      ? '#10B981'
+                      : item.type === 'records'
+                      ? '#F59E0B'
+                      : '#8B5CF6';
+                  const bg =
+                    item.type === 'appointment'
+                      ? '#DBEAFE'
+                      : item.type === 'prescription'
+                      ? '#DCFCE7'
+                      : item.type === 'records'
+                      ? '#FEF3C7'
+                      : '#EDE9FE';
                   const subtitle =
                     item.time ||
                     (item.timestamp
                       ? new Date(item.timestamp).toLocaleString()
                       : '');
+                  const timeLabel = item.timestamp
+                    ? timeAgo(item.timestamp)
+                    : item.time || '';
                   return (
                     <View style={styles.activityItem}>
-                      <View style={styles.activityLeft}>
-                        <Image
-                          source={icon}
-                          style={styles.activityIcon}
-                          resizeMode="contain"
-                        />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text
-                          style={styles.activityItemTitle}
-                          numberOfLines={1}
+                      <View
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 10,
+                          flex: 1,
+                        }}
+                      >
+                        <View
+                          style={[
+                            styles.activityLeft,
+                            styles.activityLeftBadge,
+                            { backgroundColor: bg },
+                          ]}
                         >
-                          {item.title}
-                        </Text>
-                        {!!subtitle && (
-                          <Text style={styles.activityItemSub}>{subtitle}</Text>
-                        )}
+                          <Image
+                            source={icon}
+                            style={[styles.activityIcon, { tintColor: tint }]}
+                            resizeMode="contain"
+                          />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text
+                            style={styles.activityItemTitle}
+                            numberOfLines={1}
+                          >
+                            {item.title}
+                          </Text>
+                          {!!subtitle && (
+                            <Text
+                              style={styles.activityItemSub}
+                              numberOfLines={1}
+                            >
+                              {subtitle}
+                            </Text>
+                          )}
+                        </View>
                       </View>
+                      {!!timeLabel && (
+                        <Text style={styles.activityTime}>{timeLabel}</Text>
+                      )}
                     </View>
                   );
                 }}
@@ -589,48 +698,46 @@ export default function DoctorDashboard() {
 
 function DashboardCard({
   title,
-  icon,
+  iconSource,
   description,
   count,
   tag,
+  accentColor = '#10B981',
   onPress,
 }: {
   title: string;
-  icon: React.ReactNode;
+  iconSource: any;
   description?: string;
   count?: number;
   tag?: string;
+  accentColor?: string;
   onPress?: () => void;
 }) {
   const Wrapper: any = onPress ? TouchableOpacity : View;
   return (
     <Wrapper
-      style={styles.card}
+      style={[styles.card, styles.cardShadow]}
       {...(onPress ? { activeOpacity: 0.85, onPress } : {})}
     >
-      <View style={styles.cardTopRow}>
-        <Text style={styles.cardTitle}>{title}</Text>
-        <View style={styles.cardIconWrap}>{icon}</View>
-      </View>
-      {!!(tag || count) && (
-        <View style={styles.cardMetaRow}>
-          {!!tag && (
-            <View style={styles.tagPill}>
-              <Text style={styles.tagText}>{tag}</Text>
-            </View>
-          )}
-          {!!count && (
-            <View style={styles.badgeCount}>
-              <Text style={styles.badgeCountText}>{count}</Text>
-            </View>
+      <View style={[styles.cardAccent, { backgroundColor: accentColor }]} />
+      <Text style={styles.cardTitle}>{title}</Text>
+      <View style={styles.cardContentRow}>
+        <View style={styles.iconCircle}>
+          <Image
+            source={iconSource}
+            style={[styles.cardImg, { tintColor: accentColor }]}
+            resizeMode="contain"
+          />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.bigNumber}>{Number(count || 0)}</Text>
+          {!!(tag || description) && (
+            <Text style={styles.subLabel} numberOfLines={2}>
+              {tag || description}
+            </Text>
           )}
         </View>
-      )}
-      {!!description && (
-        <Text style={styles.cardText} numberOfLines={5}>
-          {description}
-        </Text>
-      )}
+      </View>
     </Wrapper>
   );
 }
@@ -714,7 +821,7 @@ const styles = StyleSheet.create({
     paddingLeft: 8,
   },
   scrollContent: { paddingHorizontal: 16, paddingBottom: 90 },
-  title: { fontSize: 18, fontWeight: '700', color: GREEN, marginTop: 12 },
+  title: { fontSize: 18, fontWeight: '700', color: '#000000', marginTop: 12 },
   sectionDivider: {
     height: 1,
     backgroundColor: BORDER,
@@ -730,62 +837,51 @@ const styles = StyleSheet.create({
   },
   card: {
     width: '48%',
-    backgroundColor: CARD_BG,
+    backgroundColor: '#FFFFFF',
     borderRadius: 14,
     padding: 12,
-  },
-  cardTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  cardTitle: { color: GREEN, fontWeight: '700' },
-  cardIconWrap: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cardRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  cardIcon: { fontSize: 16, color: GREEN },
-  cardImg: { width: 18, height: 18, tintColor: GREEN },
-  cardText: { color: MUTED, fontSize: 12 },
-  cardMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
-  },
-  badgeCount: {
-    alignSelf: 'flex-start',
-    marginBottom: 0,
-    backgroundColor: '#E6FFF5',
-    borderColor: GREEN,
     borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    height: 22,
+    borderColor: '#EEF2F7',
+    position: 'relative',
+  },
+  cardShadow: {
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  cardAccent: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 4,
+    borderTopLeftRadius: 14,
+    borderBottomLeftRadius: 14,
+  },
+  cardTitle: { color: '#0F172A', fontWeight: '700', marginBottom: 8 },
+  cardContentRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  iconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#F3F4F6',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  badgeCountText: { color: GREEN, fontWeight: '700', fontSize: 12 },
-  tagPill: {
-    backgroundColor: '#E6FFF5',
-    borderColor: GREEN,
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    height: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
+  cardImg: { width: 22, height: 22 },
+  bigNumber: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#111827',
+    lineHeight: 24,
   },
-  tagText: { color: GREEN, fontWeight: '700', fontSize: 10 },
+  subLabel: { color: MUTED, fontSize: 12, marginTop: 2 },
 
   activityCard: {
     marginTop: 16,
-    backgroundColor: CARD_BG,
+    backgroundColor: '#FFFFFF',
     borderRadius: 14,
     borderWidth: 1,
     borderColor: '#F3F4F6',
@@ -796,8 +892,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  activityTitle: { color: GREEN, fontWeight: '700' },
-  viewAll: { color: MUTED },
+  activityTitle: { color: '#111827', fontWeight: '700' },
+  viewAll: { color: GREEN, fontWeight: '700' },
   activityBody: { paddingTop: 8 },
   activityItem: {
     flexDirection: 'row',
@@ -817,16 +913,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  activityLeftBadge: {
+    borderWidth: 0,
+  },
   activityIcon: { width: 18, height: 18, tintColor: GREEN },
   activityItemTitle: { color: '#111827', fontWeight: '700', fontSize: 13 },
   activityItemSub: { color: MUTED, fontSize: 11, marginTop: 2 },
+  activityTime: { color: MUTED, fontSize: 11 },
 
   bottomBar: {
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 45,
-    height: 64,
+    bottom: 0,
+    height: 80,
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
     borderTopColor: BORDER,
@@ -835,7 +935,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   bottomItem: { alignItems: 'center', justifyContent: 'center' },
-  bottomImg: { width: 22, height: 22, marginBottom: 4 },
+  bottomImg: { width: 26, height: 26, marginBottom: 4 },
   bottomLabel: { fontSize: 10, color: MUTED },
 
   // Modal styles

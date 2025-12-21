@@ -63,10 +63,26 @@ export default function AppNavigator() {
 
       {/* Patient Screens */}
       <Stack.Screen name="PatientDashboard" component={PatientDashboard} />
-      <Stack.Screen name="PatientProfile" component={PatientDashboard} />
-      <Stack.Screen name="BookAppointment" component={PatientDashboard} />
-      <Stack.Screen name="MedicalRecords" component={PatientDashboard} />
-      <Stack.Screen name="Appointments" component={PatientDashboard} />
+      <Stack.Screen
+        name="PatientProfile"
+        component={require('../app/patient/patient_profile').default}
+      />
+      <Stack.Screen
+        name="BookAppointment"
+        component={require('../app/patient/patient_appointment').default}
+      />
+      <Stack.Screen
+        name="PatientPrescription"
+        component={require('../app/patient/patient_prescription').default}
+      />
+      <Stack.Screen
+        name="MedicalRecords"
+        component={require('../app/patient/patient_records').default}
+      />
+      <Stack.Screen
+        name="Appointments"
+        component={require('../app/patient/patient_appointment').default}
+      />
       <Stack.Screen name="AppointmentDetails" component={PatientDashboard} />
       <Stack.Screen name="MedicalRecordDetails" component={PatientDashboard} />
     </Stack.Navigator>

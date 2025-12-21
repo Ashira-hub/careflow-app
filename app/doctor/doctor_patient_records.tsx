@@ -34,6 +34,7 @@ export default function DoctorPatientRecords() {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [avatarUri, setAvatarUri] = useState<string | undefined>(undefined);
+  const [refreshing, setRefreshing] = useState(false);
 
   const API_BASE = 'https://capstone-production-8af8.up.railway.app';
   const getAuthHeaders = React.useCallback(async () => {
@@ -116,6 +117,61 @@ export default function DoctorPatientRecords() {
       return () => {};
     }, [getAuthHeaders]),
   );
+
+  const reload = React.useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`${API_BASE}/api/patient-records?own=1`, {
+        headers,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const rows = await res.json();
+      const mapped: Patient[] = (Array.isArray(rows) ? rows : []).map(
+        (r: any) => {
+          const ts = r?.last_ts ? Date.parse(r.last_ts) : Date.now();
+          const rec: PatientRecord = {
+            id: `PR-${r.patient}`,
+            name: String(r.patient || ''),
+            appointments: [
+              {
+                date: '',
+                time: '',
+                notes: undefined,
+                createdAt: isNaN(ts) ? Date.now() : ts,
+              },
+            ],
+            prescriptions: [],
+          };
+          return rec;
+        },
+      );
+      setRecords(mapped);
+    } catch {
+      try {
+        setRecords(getRecords());
+      } catch {
+        setRecords([]);
+      }
+    }
+    try {
+      const rawN = await AsyncStorage.getItem('doctor_notifications');
+      const arrN = rawN ? JSON.parse(rawN) : [];
+      const count = Array.isArray(arrN)
+        ? arrN.filter((n: any) => n && n.read === false).length
+        : 0;
+      setUnreadCount(count);
+    } catch {
+      setUnreadCount(0);
+    }
+    try {
+      const rawS = await AsyncStorage.getItem('session');
+      const sess = rawS ? JSON.parse(rawS) : null;
+      const uri = sess?.user?.avatar_uri || sess?.avatar_uri || undefined;
+      setAvatarUri(uri || undefined);
+    } catch {}
+    setRefreshing(false);
+  }, [getAuthHeaders]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -269,6 +325,8 @@ export default function DoctorPatientRecords() {
           keyExtractor={item => item.id}
           ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
           renderItem={renderItem}
+          refreshing={refreshing}
+          onRefresh={reload}
           ListEmptyComponent={() => (
             <View style={styles.emptyWrap}>
               <Text style={styles.emptyText}>No patients found.</Text>
@@ -363,7 +421,7 @@ function BottomItem({
   return (
     <TouchableOpacity
       style={styles.bottomItem}
-      activeOpacity={0.85}
+      activeOpacity={0.8}
       onPress={onPress}
     >
       <Image
@@ -380,7 +438,7 @@ function BottomItem({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#FFFFFF' },
-  container: { flex: 1, paddingBottom: 110 },
+  container: { flex: 1 },
 
   header: {
     flexDirection: 'row',
@@ -440,7 +498,7 @@ const styles = StyleSheet.create({
   },
   searchText: { color: '#FFFFFF', fontWeight: '700' },
 
-  listContent: { padding: 16, paddingBottom: 16 },
+  listContent: { padding: 16, paddingBottom: 80 },
   emptyWrap: { padding: 24, alignItems: 'center' },
   emptyText: { color: MUTED },
   row: {
@@ -479,8 +537,8 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 45,
-    height: 64,
+    bottom: 0,
+    height: 80,
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
     borderTopColor: BORDER,
@@ -489,7 +547,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   bottomItem: { alignItems: 'center', justifyContent: 'center' },
-  bottomImg: { width: 22, height: 22, marginBottom: 4 },
+  bottomImg: { width: 26, height: 26, marginBottom: 4 },
   bottomLabel: { fontSize: 10, color: MUTED },
   // Dropdown styles
   dropdownOverlay: {

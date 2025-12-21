@@ -261,7 +261,7 @@ export default function DoctorProfile() {
         <View style={styles.divider} />
 
         <ScrollView
-          contentContainerStyle={{ paddingBottom: 120 }}
+          contentContainerStyle={{ paddingBottom: 80 }}
           showsVerticalScrollIndicator={false}
         >
           <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
@@ -426,7 +426,7 @@ function BottomItem({
   return (
     <TouchableOpacity
       style={styles.bottomItem}
-      activeOpacity={0.85}
+      activeOpacity={0.8}
       onPress={onPress}
     >
       <Image
@@ -443,7 +443,7 @@ function BottomItem({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#FFFFFF' },
-  container: { flex: 1, paddingBottom: 110 },
+  container: { flex: 1 },
 
   header: {
     flexDirection: 'row',
@@ -613,8 +613,8 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 45,
-    height: 64,
+    bottom: 0,
+    height: 80,
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
     borderTopColor: BORDER,
@@ -623,7 +623,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   bottomItem: { alignItems: 'center', justifyContent: 'center' },
-  bottomImg: { width: 22, height: 22, marginBottom: 4 },
+  bottomImg: { width: 26, height: 26, marginBottom: 4 },
   bottomLabel: { fontSize: 10, color: MUTED },
   // Dropdown styles
   dropdownOverlay: {

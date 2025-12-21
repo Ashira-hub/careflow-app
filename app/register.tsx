@@ -36,7 +36,9 @@ export default function RegisterScreen({ navigation }: Props) {
 
   const roles = useMemo(() => ['Doctor', 'Patient'], []);
 
-  const API_URL = 'http://localhost:3001/api/users/register'; // Update with your backend URL
+  // Replace 192.168.1.100 with your computer's local IP address
+  const API_URL =
+    'https://capstone-production-8af8.up.railway.app/api/users/register';
 
   const toRoleValue = (label: string | null) => {
     if (!label) return null;

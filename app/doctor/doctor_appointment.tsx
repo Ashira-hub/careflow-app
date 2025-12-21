@@ -15,7 +15,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { addAppointment } from '../../state/patient_records_store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { scheduleAppointmentNotifications, cancelAppointmentNotifications } from '../../utils/notifications';
+import {
+  scheduleAppointmentNotifications,
+  cancelAppointmentNotifications,
+} from '../../utils/notifications';
 import { addAppointment as addPatientRecordAppointment } from '../../state/patient_records_store';
 
 const GREEN = '#10B981';
@@ -32,7 +35,20 @@ export default function DoctorAppointment() {
   const [current, setCurrent] = useState(new Date());
   const year = current.getFullYear();
   const month = current.getMonth(); // 0-11
-  const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const monthNames = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
 
   // Build a 6x7 matrix for the month view
   const monthMatrix = useMemo(() => {
@@ -52,8 +68,15 @@ export default function DoctorAppointment() {
   }, [year, month]);
 
   const today = new Date();
-  const isToday = (d: number | null) => d !== null && d === today.getDate() && month === today.getMonth() && year === today.getFullYear();
-  const todayStart = useMemo(() => new Date(today.getFullYear(), today.getMonth(), today.getDate()), [today]);
+  const isToday = (d: number | null) =>
+    d !== null &&
+    d === today.getDate() &&
+    month === today.getMonth() &&
+    year === today.getFullYear();
+  const todayStart = useMemo(
+    () => new Date(today.getFullYear(), today.getMonth(), today.getDate()),
+    [today],
+  );
   const isPastCalendarDate = (d: number | null) => {
     if (d === null) return true;
     const cand = new Date(year, month, d);
@@ -62,70 +85,103 @@ export default function DoctorAppointment() {
 
   const confirmDone = (idx: number) => {
     const a = appointments[idx];
-    Alert.alert(
-      'Mark as done',
-      'Are you sure this is done?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Yes',
-          style: 'default',
-          onPress: async () => {
-            const a = appointments[idx];
-            try {
-              const headers = await getAuthHeaders();
-              if (a?.id != null) {
-                const res = await fetch(`${API_BASE}/api/appointments/${a.id}`, { method: 'PUT', headers, body: JSON.stringify({ done: true }) });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                await res.json();
-              } else {
-                // No id yet, just proceed
-              }
-              // Record to patient records store
-              try {
-                if (a?.patient) {
-                  addPatientRecordAppointment(String(a.patient), { date: String(a.date || ''), time: String(a.time || ''), notes: a?.notes });
-                }
-              } catch {}
-              // Persist record to backend (merge into latest to avoid duplicates)
-              try {
-                if (a?.patient) {
-                  const headers2 = await getAuthHeaders();
-                  // Try to derive doctor name
-                  let doctorName: string | undefined = (a as any)?.created_by_name;
-                  if (!doctorName) {
-                    try {
-                      const raw = await AsyncStorage.getItem('session');
-                      if (raw) {
-                        const sess = JSON.parse(raw);
-                        doctorName = sess?.user?.full_name || sess?.user?.fullName || sess?.user?.name || undefined;
-                      }
-                    } catch {}
-                  }
-                  await fetch(`${API_BASE}/api/patient-records/latest`, {
-                    method: 'PUT',
-                    headers: headers2,
-                    body: JSON.stringify({ patient: a.patient, date: a.date, time: a.time, notes: a.notes, doctor: doctorName, medicine: (a as any)?.medicine || null, dosage: (a as any)?.dosage || null }),
-                  });
-                }
-              } catch {}
-              // Remove from local list after marking done
-              setAppointments((prev) => prev.filter((_, i) => i !== idx));
-              // Log activity: appointment done
-              try {
-                const rawAct = await AsyncStorage.getItem('doctor_activity');
-                const arrAct = rawAct ? JSON.parse(rawAct) : [];
-                const item = { id: String(Date.now()), title: `Appointment done: ${a?.patient || ''}`, type: 'appointment', timestamp: Date.now() };
-                const updatedAct = Array.isArray(arrAct) ? arrAct.slice(0, 99) : []; // Keep only latest 100
-                await AsyncStorage.setItem('doctor_activity', JSON.stringify([item, ...updatedAct]));
-              } catch {}
-            } catch (e: any) {
-              Alert.alert('Error', `Failed to mark done: ${e?.message || 'Network error'}`);
+    Alert.alert('Mark as done', 'Are you sure this is done?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Yes',
+        style: 'default',
+        onPress: async () => {
+          const a = appointments[idx];
+          try {
+            const headers = await getAuthHeaders();
+            if (a?.id != null) {
+              const res = await fetch(`${API_BASE}/api/appointments/${a.id}`, {
+                method: 'PUT',
+                headers,
+                body: JSON.stringify({ done: true }),
+              });
+              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+              await res.json();
+            } else {
+              // No id yet, just proceed
             }
-          },
+            // Record to patient records store
+            try {
+              if (a?.patient) {
+                addPatientRecordAppointment(String(a.patient), {
+                  date: String(a.date || ''),
+                  time: String(a.time || ''),
+                  notes: a?.notes,
+                });
+              }
+            } catch {}
+            // Persist record to backend (merge into latest to avoid duplicates)
+            try {
+              if (a?.patient) {
+                const headers2 = await getAuthHeaders();
+                // Try to derive doctor name
+                let doctorName: string | undefined = (a as any)
+                  ?.created_by_name;
+                if (!doctorName) {
+                  try {
+                    const raw = await AsyncStorage.getItem('session');
+                    if (raw) {
+                      const sess = JSON.parse(raw);
+                      doctorName =
+                        sess?.user?.full_name ||
+                        sess?.user?.fullName ||
+                        sess?.user?.name ||
+                        undefined;
+                    }
+                  } catch {}
+                }
+                await fetch(`${API_BASE}/api/patient-records/latest`, {
+                  method: 'PUT',
+                  headers: headers2,
+                  body: JSON.stringify({
+                    patient: a.patient,
+                    date: a.date,
+                    time: a.time,
+                    notes: a.notes,
+                    doctor: doctorName,
+                    medicine: (a as any)?.medicine || null,
+                    dosage: (a as any)?.dosage || null,
+                  }),
+                });
+              }
+            } catch {}
+            // Remove from local list after marking done
+            setAppointments(prev => prev.filter((_, i) => i !== idx));
+            try {
+              setShowDetail(false);
+            } catch {}
+            // Log activity: appointment done
+            try {
+              const rawAct = await AsyncStorage.getItem('doctor_activity');
+              const arrAct = rawAct ? JSON.parse(rawAct) : [];
+              const item = {
+                id: String(Date.now()),
+                title: `Appointment done: ${a?.patient || ''}`,
+                type: 'appointment',
+                timestamp: Date.now(),
+              };
+              const updatedAct = Array.isArray(arrAct)
+                ? arrAct.slice(0, 99)
+                : []; // Keep only latest 100
+              await AsyncStorage.setItem(
+                'doctor_activity',
+                JSON.stringify([item, ...updatedAct]),
+              );
+            } catch {}
+          } catch (e: any) {
+            Alert.alert(
+              'Error',
+              `Failed to mark done: ${e?.message || 'Network error'}`,
+            );
+          }
         },
-      ]
-    );
+      },
+    ]);
   };
 
   const openDetail = (idx: number) => {
@@ -140,7 +196,8 @@ export default function DoctorAppointment() {
 
   const onUpdateDetail = async () => {
     if (detailIndex === null) return setShowDetail(false);
-    if (!dPatient) return Alert.alert('Validation', 'Please enter a patient name.');
+    if (!dPatient)
+      return Alert.alert('Validation', 'Please enter a patient name.');
     if (!dDate) return Alert.alert('Validation', 'Please select a date.');
     if (!dTime) return Alert.alert('Validation', 'Please select a time.');
 
@@ -148,19 +205,21 @@ export default function DoctorAppointment() {
     if (!dt) return Alert.alert('Validation', 'Invalid date format.');
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    if (dt < start) return Alert.alert('Invalid date', 'Please pick today or a future date.');
+    if (dt < start)
+      return Alert.alert('Invalid date', 'Please pick today or a future date.');
     if (
       dt.getFullYear() === now.getFullYear() &&
       dt.getMonth() === now.getMonth() &&
       dt.getDate() === now.getDate()
     ) {
       const [hhmm, ap] = dTime.split(' ');
-      const [hh, mm] = (hhmm || '').split(':').map((v) => Number(v));
+      const [hh, mm] = (hhmm || '').split(':').map(v => Number(v));
       if (isFinite(hh) && isFinite(mm)) {
         const sel24 = (hh % 12) + (ap?.toUpperCase() === 'PM' ? 12 : 0);
         const selMinutes = sel24 * 60 + mm;
         const nowMinutes = now.getHours() * 60 + now.getMinutes();
-        if (selMinutes <= nowMinutes) return Alert.alert('Invalid time', 'Please select a future time.');
+        if (selMinutes <= nowMinutes)
+          return Alert.alert('Invalid time', 'Please select a future time.');
       }
     }
 
@@ -168,30 +227,91 @@ export default function DoctorAppointment() {
       const headers = await getAuthHeaders();
       const cur = appointments[detailIndex];
       // cancel existing scheduled notifications for old values
-      try { await cancelAppointmentNotifications(cur?.id ?? null, cur.patient, cur.date, cur.time); } catch {}
+      try {
+        await cancelAppointmentNotifications(
+          cur?.id ?? null,
+          cur.patient,
+          cur.date,
+          cur.time,
+        );
+      } catch {}
       if (cur?.id != null) {
-        const res = await fetch(`${API_BASE}/api/appointments/${cur.id}`, { method: 'PUT', headers, body: JSON.stringify({ patient: dPatient, date: dDate, time: dTime, notes: dNotes }) });
+        const res = await fetch(`${API_BASE}/api/appointments/${cur.id}`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify({
+            patient: dPatient,
+            date: dDate,
+            time: dTime,
+            notes: dNotes,
+          }),
+        });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const updated = await res.json();
-        setAppointments((prev) => prev.map((item, i) => (i === detailIndex ? { id: updated.id, patient: updated.patient, date: updated.date, time: updated.time, notes: updated.notes, done: updated.done } : item)));
+        setAppointments(prev =>
+          prev.map((item, i) =>
+            i === detailIndex
+              ? {
+                  id: updated.id,
+                  patient: updated.patient,
+                  date: updated.date,
+                  time: updated.time,
+                  notes: updated.notes,
+                  done: updated.done,
+                }
+              : item,
+          ),
+        );
         // schedule notifications for updated appointment
-        try { await scheduleAppointmentNotifications(updated?.id ?? null, updated.patient, updated.date, updated.time); } catch {}
+        try {
+          await scheduleAppointmentNotifications(
+            updated?.id ?? null,
+            updated.patient,
+            updated.date,
+            updated.time,
+          );
+        } catch {}
       } else {
-        setAppointments((prev) => prev.map((item, i) => (i === detailIndex ? { ...item, patient: dPatient, date: dDate, time: dTime, notes: dNotes } : item)));
+        setAppointments(prev =>
+          prev.map((item, i) =>
+            i === detailIndex
+              ? {
+                  ...item,
+                  patient: dPatient,
+                  date: dDate,
+                  time: dTime,
+                  notes: dNotes,
+                }
+              : item,
+          ),
+        );
         // schedule notifications for updated appointment (no id yet)
-        try { await scheduleAppointmentNotifications(null, dPatient, dDate, dTime); } catch {}
+        try {
+          await scheduleAppointmentNotifications(null, dPatient, dDate, dTime);
+        } catch {}
       }
       setShowDetail(false);
       // Log activity: appointment updated
       try {
         const rawAct = await AsyncStorage.getItem('doctor_activity');
         const arrAct = rawAct ? JSON.parse(rawAct) : [];
-        const item = { id: String(Date.now()), title: `Appointment updated: ${dPatient}`, type: 'appointment', timestamp: Date.now() };
+        const item = {
+          id: String(Date.now()),
+          title: `Appointment updated: ${dPatient}`,
+          type: 'appointment',
+          timestamp: Date.now(),
+        };
         const updatedAct = Array.isArray(arrAct) ? arrAct.slice(0, 99) : []; // Keep only latest 100
-        await AsyncStorage.setItem('doctor_activity', JSON.stringify([item, ...updatedAct]));
+        await AsyncStorage.setItem(
+          'doctor_activity',
+          JSON.stringify([item, ...updatedAct]),
+        );
       } catch {}
     } catch (e: any) {
-      Alert.alert('Error', `Failed to update: ${e?.message || 'Network error'}`);
+      Alert.alert(
+        'Error',
+        `Failed to update: ${e?.message || 'Network error'}`,
+      );
     }
   };
 
@@ -201,22 +321,44 @@ export default function DoctorAppointment() {
     try {
       if (cur?.id != null) {
         const headers = await getAuthHeaders();
-        const res = await fetch(`${API_BASE}/api/appointments/${cur.id}`, { method: 'DELETE', headers });
-        if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+        const res = await fetch(`${API_BASE}/api/appointments/${cur.id}`, {
+          method: 'DELETE',
+          headers,
+        });
+        if (!res.ok && res.status !== 204)
+          throw new Error(`HTTP ${res.status}`);
       }
       // cancel notifications for this appointment
-      try { await cancelAppointmentNotifications(cur?.id ?? null, cur.patient, cur.date, cur.time); } catch {}
-      setAppointments((prev) => prev.filter((_, i) => i !== detailIndex));
+      try {
+        await cancelAppointmentNotifications(
+          cur?.id ?? null,
+          cur.patient,
+          cur.date,
+          cur.time,
+        );
+      } catch {}
+      setAppointments(prev => prev.filter((_, i) => i !== detailIndex));
       // Log activity: appointment deleted
       try {
         const rawAct = await AsyncStorage.getItem('doctor_activity');
         const arrAct = rawAct ? JSON.parse(rawAct) : [];
-        const item = { id: String(Date.now()), title: `Appointment deleted: ${cur?.patient || ''}`, type: 'appointment', timestamp: Date.now() };
+        const item = {
+          id: String(Date.now()),
+          title: `Appointment deleted: ${cur?.patient || ''}`,
+          type: 'appointment',
+          timestamp: Date.now(),
+        };
         const updatedAct = Array.isArray(arrAct) ? arrAct.slice(0, 99) : []; // Keep only latest 100
-        await AsyncStorage.setItem('doctor_activity', JSON.stringify([item, ...updatedAct]));
+        await AsyncStorage.setItem(
+          'doctor_activity',
+          JSON.stringify([item, ...updatedAct]),
+        );
       } catch {}
     } catch (e: any) {
-      Alert.alert('Error', `Failed to delete: ${e?.message || 'Network error'}`);
+      Alert.alert(
+        'Error',
+        `Failed to delete: ${e?.message || 'Network error'}`,
+      );
     } finally {
       setShowDetail(false);
     }
@@ -236,16 +378,23 @@ export default function DoctorAppointment() {
             try {
               if (a?.id != null) {
                 const headers = await getAuthHeaders();
-                const res = await fetch(`${API_BASE}/api/appointments/${a.id}`, { method: 'DELETE', headers });
-                if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+                const res = await fetch(
+                  `${API_BASE}/api/appointments/${a.id}`,
+                  { method: 'DELETE', headers },
+                );
+                if (!res.ok && res.status !== 204)
+                  throw new Error(`HTTP ${res.status}`);
               }
-              setAppointments((prev) => prev.filter((_, i) => i !== idx));
+              setAppointments(prev => prev.filter((_, i) => i !== idx));
             } catch (e: any) {
-              Alert.alert('Error', `Failed to delete: ${e?.message || 'Network error'}`);
+              Alert.alert(
+                'Error',
+                `Failed to delete: ${e?.message || 'Network error'}`,
+              );
             }
           },
         },
-      ]
+      ],
     );
   };
 
@@ -257,10 +406,25 @@ export default function DoctorAppointment() {
   const [notes, setNotes] = useState('');
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
-  const [tpHour, setTpHour] = useState<number>(new Date().getHours() % 12 || 12);
-  const [tpMinute, setTpMinute] = useState<number>(new Date().getMinutes() - (new Date().getMinutes() % 5));
-  const [tpPeriod, setTpPeriod] = useState<'AM' | 'PM'>(new Date().getHours() >= 12 ? 'PM' : 'AM');
-  const [appointments, setAppointments] = useState<Array<{ id?: number; patient: string; date: string; time: string; notes?: string; done?: boolean }>>([]);
+  const [tpHour, setTpHour] = useState<number>(
+    new Date().getHours() % 12 || 12,
+  );
+  const [tpMinute, setTpMinute] = useState<number>(
+    new Date().getMinutes() - (new Date().getMinutes() % 5),
+  );
+  const [tpPeriod, setTpPeriod] = useState<'AM' | 'PM'>(
+    new Date().getHours() >= 12 ? 'PM' : 'AM',
+  );
+  const [appointments, setAppointments] = useState<
+    Array<{
+      id?: number;
+      patient: string;
+      date: string;
+      time: string;
+      notes?: string;
+      done?: boolean;
+    }>
+  >([]);
   const [pickerTarget, setPickerTarget] = useState<'new' | 'detail'>('new');
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -269,7 +433,12 @@ export default function DoctorAppointment() {
   const [reminderBannerMsg, setReminderBannerMsg] = useState<string>('');
   const [showReminderPicker, setShowReminderPicker] = useState(false);
   const [reminderTarget, setReminderTarget] = useState<{
-    id?: number; patient: string; date: string; time: string; notes?: string; done?: boolean
+    id?: number;
+    patient: string;
+    date: string;
+    time: string;
+    notes?: string;
+    done?: boolean;
   } | null>(null);
   const [customMinutesInput, setCustomMinutesInput] = useState<string>('');
 
@@ -281,7 +450,21 @@ export default function DoctorAppointment() {
   const [dTime, setDTime] = useState('');
   const [dNotes, setDNotes] = useState('');
 
-  const monthAbbr = (m: number) => ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][m] || '';
+  const monthAbbr = (m: number) =>
+    [
+      'JAN',
+      'FEB',
+      'MAR',
+      'APR',
+      'MAY',
+      'JUN',
+      'JUL',
+      'AUG',
+      'SEP',
+      'OCT',
+      'NOV',
+      'DEC',
+    ][m] || '';
   const parseYmd = (ymd: string) => {
     const [y, m, d] = ymd.split('-').map(Number);
     if (!y || !m || !d) return null;
@@ -298,12 +481,17 @@ export default function DoctorAppointment() {
   const getAuthHeaders = React.useCallback(async () => {
     try {
       const raw = await AsyncStorage.getItem('session');
-      const base = { 'Content-Type': 'application/json' } as Record<string, string>;
+      const base = { 'Content-Type': 'application/json' } as Record<
+        string,
+        string
+      >;
       if (!raw) return base;
       const sess = JSON.parse(raw);
       const token = sess?.token || sess?.user?.token || sess?.accessToken;
       const userId = sess?.user?.id || sess?.id;
-      const withAuth = token ? { ...base, Authorization: `Bearer ${token}` } : base;
+      const withAuth = token
+        ? { ...base, Authorization: `Bearer ${token}` }
+        : base;
       return userId ? { ...withAuth, 'X-User-Id': String(userId) } : withAuth;
     } catch {
       return { 'Content-Type': 'application/json' };
@@ -311,65 +499,136 @@ export default function DoctorAppointment() {
   }, []);
 
   // Parse appointment date (YYYY-MM-DD) and time (HH:MM AM/PM) into a Date
-  const parseApptDateTime = React.useCallback((ymd: string, tm: string): Date | null => {
-    try {
-      const [y, m, d] = ymd.split('-').map(Number);
-      const [hhmm, ap] = (tm || '').split(' ');
-      const [hhStr, mmStr] = (hhmm || '').split(':');
-      const hh = Number(hhStr);
-      const mm = Number(mmStr);
-      if (!y || !m || !d || !isFinite(hh) || !isFinite(mm)) return null;
-      const h24 = (hh % 12) + (String(ap).toUpperCase() === 'PM' ? 12 : 0);
-      const dt = new Date(y, m - 1, d, h24, mm, 0, 0);
-      return dt;
-    } catch { return null; }
-  }, []);
+  const parseApptDateTime = React.useCallback(
+    (ymd: string, tm: string): Date | null => {
+      try {
+        const [y, m, d] = ymd.split('-').map(Number);
+        const [hhmm, ap] = (tm || '').split(' ');
+        const [hhStr, mmStr] = (hhmm || '').split(':');
+        const hh = Number(hhStr);
+        const mm = Number(mmStr);
+        if (!y || !m || !d || !isFinite(hh) || !isFinite(mm)) return null;
+        const h24 = (hh % 12) + (String(ap).toUpperCase() === 'PM' ? 12 : 0);
+        const dt = new Date(y, m - 1, d, h24, mm, 0, 0);
+        return dt;
+      } catch {
+        return null;
+      }
+    },
+    [],
+  );
 
   // Store reminders: day-before and 30-min-before
-  const setReminderForAppointment = React.useCallback(async (a: { id?: number; patient: string; date: string; time: string; notes?: string; done?: boolean }, opts?: { near?: boolean; now?: boolean; customMinutes?: number }) => {
-    const when = parseApptDateTime(a.date, a.time);
-    if (!when) { Alert.alert('Reminder', 'Cannot parse appointment date/time.'); return; }
-    const ts = when.getTime();
-    const r1 = { id: `rem-${ts}-tomorrow-${a.id ?? ''}`, apptId: a.id ?? null, patient: a.patient, time: a.time, kind: 'tomorrow', ts: ts - 24 * 60 * 60 * 1000, fired: false };
-    const r2 = { id: `rem-${ts}-near-${a.id ?? ''}`, apptId: a.id ?? null, patient: a.patient, time: a.time, kind: 'near', ts: ts - 30 * 60 * 1000, fired: false };
-    const custom = (opts?.customMinutes && Number.isFinite(opts.customMinutes) && opts.customMinutes! > 0)
-      ? { id: `rem-${ts}-m${Math.floor(opts!.customMinutes!)}-${a.id ?? ''}`, apptId: a.id ?? null, patient: a.patient, time: a.time, kind: 'custom', minutes: Math.floor(opts!.customMinutes!), ts: ts - Math.floor(opts!.customMinutes!) * 60 * 1000, fired: false }
-      : null;
-    try {
-      const raw = await AsyncStorage.getItem('doctor_reminders');
-      const parsed = raw ? JSON.parse(raw) : [];
-      const arr: any[] = Array.isArray(parsed) ? parsed : [];
-      // Deduplicate by id
-      const byId = new Map(arr.map((x: any) => [x.id, x]));
-      // Only set 'tomorrow' reminder if appointment day is after today
-      const wantNear = opts?.near ?? true;
-      const wantNow = opts?.now ?? true;
-      try {
-        const now = new Date();
-        const todayMid = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-        const apptMid = new Date(when.getFullYear(), when.getMonth(), when.getDate()).getTime();
-        if (wantNear && apptMid > todayMid) {
-          byId.set(r1.id, r1);
-        }
-      } catch { if (wantNear) byId.set(r1.id, r1); }
-      if (wantNow) byId.set(r2.id, r2);
-      if (custom && custom.ts > Date.now()) byId.set(custom.id, custom);
-      const next = Array.from(byId.values());
-      await AsyncStorage.setItem('doctor_reminders', JSON.stringify(next));
-      // Schedule OS-level local notifications (near and at time)
-      try { await scheduleAppointmentNotifications(a?.id ?? null, a.patient, a.date, a.time, { near: wantNear, now: wantNow, customMinutes: custom?.minutes }); } catch {}
-      // Show on-screen banner
-      if (custom?.minutes) {
-        setReminderBannerMsg(`Reminder set ${custom.minutes} min before for ${a.patient} at ${a.time}.`);
-      } else {
-        setReminderBannerMsg(`Reminder set for ${a.patient} at ${a.time}.`);
+  const setReminderForAppointment = React.useCallback(
+    async (
+      a: {
+        id?: number;
+        patient: string;
+        date: string;
+        time: string;
+        notes?: string;
+        done?: boolean;
+      },
+      opts?: { near?: boolean; now?: boolean; customMinutes?: number },
+    ) => {
+      const when = parseApptDateTime(a.date, a.time);
+      if (!when) {
+        Alert.alert('Reminder', 'Cannot parse appointment date/time.');
+        return;
       }
-      setShowReminderBanner(true);
-      setTimeout(() => setShowReminderBanner(false), 4000);
-    } catch {
-      Alert.alert('Reminder', 'Failed to set reminder.');
-    }
-  }, [parseApptDateTime]);
+      const ts = when.getTime();
+      const r1 = {
+        id: `rem-${ts}-tomorrow-${a.id ?? ''}`,
+        apptId: a.id ?? null,
+        patient: a.patient,
+        time: a.time,
+        kind: 'tomorrow',
+        ts: ts - 24 * 60 * 60 * 1000,
+        fired: false,
+      };
+      const r2 = {
+        id: `rem-${ts}-near-${a.id ?? ''}`,
+        apptId: a.id ?? null,
+        patient: a.patient,
+        time: a.time,
+        kind: 'near',
+        ts: ts - 30 * 60 * 1000,
+        fired: false,
+      };
+      const custom =
+        opts?.customMinutes &&
+        Number.isFinite(opts.customMinutes) &&
+        opts.customMinutes! > 0
+          ? {
+              id: `rem-${ts}-m${Math.floor(opts!.customMinutes!)}-${
+                a.id ?? ''
+              }`,
+              apptId: a.id ?? null,
+              patient: a.patient,
+              time: a.time,
+              kind: 'custom',
+              minutes: Math.floor(opts!.customMinutes!),
+              ts: ts - Math.floor(opts!.customMinutes!) * 60 * 1000,
+              fired: false,
+            }
+          : null;
+      try {
+        const raw = await AsyncStorage.getItem('doctor_reminders');
+        const parsed = raw ? JSON.parse(raw) : [];
+        const arr: any[] = Array.isArray(parsed) ? parsed : [];
+        // Deduplicate by id
+        const byId = new Map(arr.map((x: any) => [x.id, x]));
+        // Only set 'tomorrow' reminder if appointment day is after today
+        const wantNear = opts?.near ?? true;
+        const wantNow = opts?.now ?? true;
+        try {
+          const now = new Date();
+          const todayMid = new Date(
+            now.getFullYear(),
+            now.getMonth(),
+            now.getDate(),
+          ).getTime();
+          const apptMid = new Date(
+            when.getFullYear(),
+            when.getMonth(),
+            when.getDate(),
+          ).getTime();
+          if (wantNear && apptMid > todayMid) {
+            byId.set(r1.id, r1);
+          }
+        } catch {
+          if (wantNear) byId.set(r1.id, r1);
+        }
+        if (wantNow) byId.set(r2.id, r2);
+        if (custom && custom.ts > Date.now()) byId.set(custom.id, custom);
+        const next = Array.from(byId.values());
+        await AsyncStorage.setItem('doctor_reminders', JSON.stringify(next));
+        // Schedule OS-level local notifications (near and at time)
+        try {
+          await scheduleAppointmentNotifications(
+            a?.id ?? null,
+            a.patient,
+            a.date,
+            a.time,
+            { near: wantNear, now: wantNow, customMinutes: custom?.minutes },
+          );
+        } catch {}
+        // Show on-screen banner
+        if (custom?.minutes) {
+          setReminderBannerMsg(
+            `Reminder set ${custom.minutes} min before for ${a.patient} at ${a.time}.`,
+          );
+        } else {
+          setReminderBannerMsg(`Reminder set for ${a.patient} at ${a.time}.`);
+        }
+        setShowReminderBanner(true);
+        setTimeout(() => setShowReminderBanner(false), 4000);
+      } catch {
+        Alert.alert('Reminder', 'Failed to set reminder.');
+      }
+    },
+    [parseApptDateTime],
+  );
 
   // Check due reminders, enqueue notifications, and mark reminders fired
   const checkDueReminders = React.useCallback(async () => {
@@ -378,21 +637,29 @@ export default function DoctorAppointment() {
       const parsed = raw ? JSON.parse(raw) : [];
       const rems: any[] = Array.isArray(parsed) ? parsed : [];
       const now = Date.now();
-      const due = rems.filter((r: any) => !r.fired && typeof r.ts === 'number' && r.ts <= now);
+      const due = rems.filter(
+        (r: any) => !r.fired && typeof r.ts === 'number' && r.ts <= now,
+      );
       if (due.length === 0) return;
       // Load current notifications
       const rawN = await AsyncStorage.getItem('doctor_notifications');
       const parsedN = rawN ? JSON.parse(rawN) : [];
       const cur: any[] = Array.isArray(parsedN) ? parsedN : [];
       const toAdd = due.map((r: any) => {
-        let title = r.kind === 'tomorrow' ? 'Appointment Reminder' : 'Appointment Starting Soon';
+        let title =
+          r.kind === 'tomorrow'
+            ? 'Appointment Reminder'
+            : 'Appointment Starting Soon';
         let message: string;
         if (r.kind === 'tomorrow') {
           // Reconstruct appointment datetime to verify if it's actually today
           try {
             const appt = new Date((r.ts || 0) + 24 * 60 * 60 * 1000);
             const nowD = new Date();
-            const sameDay = appt.getFullYear() === nowD.getFullYear() && appt.getMonth() === nowD.getMonth() && appt.getDate() === nowD.getDate();
+            const sameDay =
+              appt.getFullYear() === nowD.getFullYear() &&
+              appt.getMonth() === nowD.getMonth() &&
+              appt.getDate() === nowD.getDate();
             if (sameDay) {
               title = 'Appointment Reminder';
               message = `Appointment for ${r.patient} is today at ${r.time}.`;
@@ -406,26 +673,41 @@ export default function DoctorAppointment() {
           title = 'Appointment Reminder';
           const mins = Number(r?.minutes);
           if (Number.isFinite(mins) && mins > 0) {
-            message = `Appointment for ${r.patient} is in ${mins} minute${mins === 1 ? '' : 's'} at ${r.time}.`;
+            message = `Appointment for ${r.patient} is in ${mins} minute${
+              mins === 1 ? '' : 's'
+            } at ${r.time}.`;
           } else {
             message = `Appointment for ${r.patient} at ${r.time} is starting soon.`;
           }
         } else {
           message = `Appointment for ${r.patient} at ${r.time} is starting soon.`;
         }
-        return { id: String(Date.now()) + Math.random().toString(36).slice(2), title, message, timestamp: Date.now(), read: false };
+        return {
+          id: String(Date.now()) + Math.random().toString(36).slice(2),
+          title,
+          message,
+          timestamp: Date.now(),
+          read: false,
+        };
       });
       const nextNotifs = [...toAdd, ...cur];
-      await AsyncStorage.setItem('doctor_notifications', JSON.stringify(nextNotifs));
+      await AsyncStorage.setItem(
+        'doctor_notifications',
+        JSON.stringify(nextNotifs),
+      );
       // Mark reminders as fired
-      const updated = rems.map((r: any) => ({ ...r, fired: r.fired || due.some((d: any) => d.id === r.id) }));
+      const updated = rems.map((r: any) => ({
+        ...r,
+        fired: r.fired || due.some((d: any) => d.id === r.id),
+      }));
       await AsyncStorage.setItem('doctor_reminders', JSON.stringify(updated));
       // Show on-screen reminder popup for the first due reminder
       const first = due[0];
       if (first) {
-        const message = first.kind === 'tomorrow'
-          ? `Appointment for ${first.patient} is tomorrow at ${first.time}.`
-          : `Appointment for ${first.patient} at ${first.time} is starting soon.`;
+        const message =
+          first.kind === 'tomorrow'
+            ? `Appointment for ${first.patient} is tomorrow at ${first.time}.`
+            : `Appointment for ${first.patient} at ${first.time} is starting soon.`;
         setReminderBannerMsg(message);
         setShowReminderBanner(true);
         setTimeout(() => setShowReminderBanner(false), 4000);
@@ -433,19 +715,28 @@ export default function DoctorAppointment() {
     } catch {}
   }, []);
 
-  const getCurrentUserName = React.useCallback(async (): Promise<string | undefined> => {
+  const getCurrentUserName = React.useCallback(async (): Promise<
+    string | undefined
+  > => {
     try {
       const raw = await AsyncStorage.getItem('session');
       if (!raw) return undefined;
       const sess = JSON.parse(raw);
-      return sess?.user?.full_name || sess?.user?.fullName || sess?.user?.name || sess?.full_name || sess?.name;
+      return (
+        sess?.user?.full_name ||
+        sess?.user?.fullName ||
+        sess?.user?.name ||
+        sess?.full_name ||
+        sess?.name
+      );
     } catch {
       return undefined;
     }
   }, []);
 
   const onSaveNew = async () => {
-    if (!patient) return Alert.alert('Validation', 'Please enter a patient name.');
+    const pn = String(patient || '').trim();
+    if (!pn) return Alert.alert('Validation', 'Please enter a patient name.');
     if (!date) return Alert.alert('Validation', 'Please select a date.');
     if (!time) return Alert.alert('Validation', 'Please select a time.');
 
@@ -454,7 +745,8 @@ export default function DoctorAppointment() {
     if (!dt) return Alert.alert('Validation', 'Invalid date format.');
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    if (dt < start) return Alert.alert('Invalid date', 'Please pick today or a future date.');
+    if (dt < start)
+      return Alert.alert('Invalid date', 'Please pick today or a future date.');
     if (
       dt.getFullYear() === now.getFullYear() &&
       dt.getMonth() === now.getMonth() &&
@@ -462,12 +754,13 @@ export default function DoctorAppointment() {
     ) {
       // compare minutes
       const [hhmm, ap] = time.split(' ');
-      const [hh, mm] = (hhmm || '').split(':').map((v) => Number(v));
+      const [hh, mm] = (hhmm || '').split(':').map(v => Number(v));
       if (isFinite(hh) && isFinite(mm)) {
         const sel24 = (hh % 12) + (ap?.toUpperCase() === 'PM' ? 12 : 0);
         const selMinutes = sel24 * 60 + mm;
         const nowMinutes = now.getHours() * 60 + now.getMinutes();
-        if (selMinutes <= nowMinutes) return Alert.alert('Invalid time', 'Please select a future time.');
+        if (selMinutes <= nowMinutes)
+          return Alert.alert('Invalid time', 'Please select a future time.');
       }
     }
 
@@ -477,23 +770,51 @@ export default function DoctorAppointment() {
       const res = await fetch(`${API_BASE}/api/appointments`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ patient, date, time, notes, done: false, createdByName }),
+        body: JSON.stringify({
+          patient: pn,
+          date,
+          time,
+          notes,
+          done: false,
+          createdByName,
+        }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const created = await res.json();
-      setAppointments((prev) => [{ id: created.id, patient: created.patient, date: created.date, time: created.time, notes: created.notes, done: created.done }, ...prev]);
+      setAppointments(prev => [
+        {
+          id: created.id,
+          patient: created.patient,
+          date: created.date,
+          time: created.time,
+          notes: created.notes,
+          done: created.done,
+        },
+        ...prev,
+      ]);
       setShowNew(false);
       resetForm();
       // Log activity: appointment created
       try {
         const rawAct = await AsyncStorage.getItem('doctor_activity');
         const arrAct = rawAct ? JSON.parse(rawAct) : [];
-        const item = { id: String(Date.now()), title: `New appointment: ${created?.patient || patient}`, type: 'appointment', timestamp: Date.now() };
+        const item = {
+          id: String(Date.now()),
+          title: `New appointment: ${created?.patient || patient}`,
+          type: 'appointment',
+          timestamp: Date.now(),
+        };
         const updatedAct = Array.isArray(arrAct) ? arrAct.slice(0, 99) : []; // Keep only latest 100
-        await AsyncStorage.setItem('doctor_activity', JSON.stringify([item, ...updatedAct]));
+        await AsyncStorage.setItem(
+          'doctor_activity',
+          JSON.stringify([item, ...updatedAct]),
+        );
       } catch {}
     } catch (e: any) {
-      Alert.alert('Error', `Failed to save appointment: ${e?.message || 'Network error'}`);
+      Alert.alert(
+        'Error',
+        `Failed to save appointment: ${e?.message || 'Network error'}`,
+      );
     }
   };
 
@@ -506,7 +827,18 @@ export default function DoctorAppointment() {
         if (!res.ok) return;
         const arr = await res.json();
         if (Array.isArray(arr)) {
-          setAppointments(arr.filter((a: any) => !a.done).map((a: any) => ({ id: a.id, patient: a.patient, date: a.date, time: a.time, notes: a.notes, done: a.done })));
+          setAppointments(
+            arr
+              .filter((a: any) => !a.done)
+              .map((a: any) => ({
+                id: a.id,
+                patient: a.patient,
+                date: a.date,
+                time: a.time,
+                notes: a.notes,
+                done: a.done,
+              })),
+          );
         }
       } catch {}
     })();
@@ -520,9 +852,13 @@ export default function DoctorAppointment() {
         try {
           const raw = await AsyncStorage.getItem('doctor_notifications');
           const arr = raw ? JSON.parse(raw) : [];
-          const count = Array.isArray(arr) ? arr.filter((n: any) => n && n.read === false).length : 0;
+          const count = Array.isArray(arr)
+            ? arr.filter((n: any) => n && n.read === false).length
+            : 0;
           setUnreadCount(count);
-        } catch { setUnreadCount(0); }
+        } catch {
+          setUnreadCount(0);
+        }
         // Load avatar from session
         try {
           const rawS = await AsyncStorage.getItem('session');
@@ -532,32 +868,75 @@ export default function DoctorAppointment() {
         } catch {}
       })();
       return () => {};
-    }, [checkDueReminders])
+    }, [checkDueReminders]),
   );
 
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
         {/* Header */}
-        <View style={[styles.header, { paddingTop: insets.top }]}> 
-          <Image source={require('../../assets/appicon.png')} style={styles.headerLogo} resizeMode="contain" />
+        <View style={[styles.header, { paddingTop: insets.top }]}>
+          <Image
+            source={require('../../assets/appicon.png')}
+            style={styles.headerLogo}
+            resizeMode="contain"
+          />
           <View style={styles.headerIcons}>
-            <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.navigate('DoctorNotification' as never)}>
+            <TouchableOpacity
+              style={styles.iconBtn}
+              onPress={() => navigation.navigate('DoctorNotification' as never)}
+            >
               <View style={{ position: 'relative' }}>
-                <Image source={require('../../assets/notification_icon.png')} style={styles.headerIconImg} resizeMode="contain" />
+                <Image
+                  source={require('../../assets/notification_icon.png')}
+                  style={styles.headerIconImg}
+                  resizeMode="contain"
+                />
                 {unreadCount > 0 && (
-                  <View style={{ position: 'absolute', right: -6, top: -6, minWidth: 14, height: 14, paddingHorizontal: 3, borderRadius: 7, backgroundColor: '#EF4444', alignItems: 'center', justifyContent: 'center' }}>
-                    <Text style={{ color: '#FFFFFF', fontSize: 9, fontWeight: '700' }}>{unreadCount > 99 ? '99+' : String(unreadCount)}</Text>
+                  <View
+                    style={{
+                      position: 'absolute',
+                      right: -6,
+                      top: -6,
+                      minWidth: 14,
+                      height: 14,
+                      paddingHorizontal: 3,
+                      borderRadius: 7,
+                      backgroundColor: '#EF4444',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: '#FFFFFF',
+                        fontSize: 9,
+                        fontWeight: '700',
+                      }}
+                    >
+                      {unreadCount > 99 ? '99+' : String(unreadCount)}
+                    </Text>
                   </View>
                 )}
               </View>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.avatarBtn} onPress={() => setShowProfileMenu(true)}>
+            <TouchableOpacity
+              style={styles.avatarBtn}
+              onPress={() => setShowProfileMenu(true)}
+            >
               <View style={styles.avatarCircle}>
                 {avatarUri ? (
-                  <Image source={{ uri: avatarUri }} style={styles.avatarImg} resizeMode="cover" />
+                  <Image
+                    source={{ uri: avatarUri }}
+                    style={styles.avatarImg}
+                    resizeMode="cover"
+                  />
                 ) : (
-                  <Image source={require('../../assets/appicon.png')} style={styles.avatarImg} resizeMode="cover" />
+                  <Image
+                    source={require('../../assets/appicon.png')}
+                    style={styles.avatarImg}
+                    resizeMode="cover"
+                  />
                 )}
               </View>
             </TouchableOpacity>
@@ -567,15 +946,20 @@ export default function DoctorAppointment() {
         <View style={styles.divider} />
 
         {showReminderBanner && (
-          <View style={[styles.reminderBanner, { top: insets.top + 48 }]}> 
-            <Text style={styles.reminderText}>{reminderBannerMsg || 'Appointment reminder'}</Text>
+          <View style={[styles.reminderBanner, { top: insets.top + 48 }]}>
+            <Text style={styles.reminderText}>
+              {reminderBannerMsg || 'Appointment reminder'}
+            </Text>
             <TouchableOpacity onPress={() => setShowReminderBanner(false)}>
               <Text style={styles.reminderClose}>×</Text>
             </TouchableOpacity>
           </View>
         )}
 
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
           {/* Title Row */}
           <View style={styles.titleRow}>
             <Text style={styles.screenTitle}>Appointment</Text>
@@ -587,36 +971,51 @@ export default function DoctorAppointment() {
           {/* Calendar Block (static mock) */}
           <View style={styles.calendarBlock}>
             <View style={styles.monthRow}>
-              <TouchableOpacity style={styles.navBtn} onPress={() => setCurrent(new Date(year, month - 1, 1))}>
+              <TouchableOpacity
+                style={styles.navBtn}
+                onPress={() => setCurrent(new Date(year, month - 1, 1))}
+              >
                 <Text style={styles.navText}>{'<'}</Text>
               </TouchableOpacity>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <View
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
+              >
                 <Text style={styles.monthText}>{monthNames[month]}</Text>
                 <Text style={styles.yearText}>{year}</Text>
               </View>
-              <TouchableOpacity style={styles.navBtn} onPress={() => setCurrent(new Date(year, month + 1, 1))}>
+              <TouchableOpacity
+                style={styles.navBtn}
+                onPress={() => setCurrent(new Date(year, month + 1, 1))}
+              >
                 <Text style={styles.navText}>{'>'}</Text>
               </TouchableOpacity>
             </View>
             <View style={styles.weekHeader}>
-              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
-                <Text key={d} style={styles.weekText}>{d}</Text>
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+                <Text key={d} style={styles.weekText}>
+                  {d}
+                </Text>
               ))}
             </View>
             <View style={styles.daysGrid}>
               {monthMatrix.map((week, rIdx) => (
                 <View key={rIdx} style={styles.weekRow}>
                   {week.map((d, cIdx) => (
-                    <View key={`${rIdx}-${cIdx}`} style={[
+                    <View
+                      key={`${rIdx}-${cIdx}`}
+                      style={[
                         styles.dayCell,
                         d === null && styles.dayCellEmpty,
                         isToday(d) && styles.dayCellToday,
-                      ]}>
-                      <Text style={[
-                        styles.dayText,
-                        d === null && styles.dayTextEmpty,
-                        isToday(d) && styles.dayTextToday,
-                      ]}>
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.dayText,
+                          d === null && styles.dayTextEmpty,
+                          isToday(d) && styles.dayTextToday,
+                        ]}
+                      >
                         {d ?? ''}
                       </Text>
                     </View>
@@ -628,12 +1027,19 @@ export default function DoctorAppointment() {
 
           {/* Appointment List Card */}
           <View style={styles.listCard}>
-            <View style={styles.listHeader}> 
+            <View style={styles.listHeader}>
               <Text style={styles.listTitle}>Appointment List</Text>
             </View>
 
             {appointments.length === 0 ? (
-              <Text style={[styles.itemDesc, { textAlign: 'center', paddingVertical: 12 }]}>No appointments yet.</Text>
+              <Text
+                style={[
+                  styles.itemDesc,
+                  { textAlign: 'center', paddingVertical: 12 },
+                ]}
+              >
+                No appointments yet.
+              </Text>
             ) : (
               appointments.map((a, idx) => {
                 const parsed = parseYmd(a.date);
@@ -641,25 +1047,57 @@ export default function DoctorAppointment() {
                 const day = parsed ? String(parsed.getDate()) : '';
                 const yr = parsed ? String(parsed.getFullYear()) : '';
                 return (
-                  <TouchableOpacity key={`${a.date}-${a.time}-${idx}`} style={styles.listItem} onPress={() => openDetail(idx)} activeOpacity={0.85}>
-                    <TouchableOpacity style={[styles.checkbox, a.done && styles.checkboxChecked]} onPress={() => confirmDone(idx)} activeOpacity={0.8}>
-                      {a.done ? <Text style={styles.checkboxTick}>✓</Text> : null}
-                    </TouchableOpacity>
-                    <View style={styles.dateCol}> 
+                  <TouchableOpacity
+                    key={`${a.date}-${a.time}-${idx}`}
+                    style={styles.listItem}
+                    onPress={() => openDetail(idx)}
+                    activeOpacity={0.85}
+                  >
+                    <View style={styles.dateCol}>
                       <Text style={styles.dateMon}>{mon}</Text>
                       <Text style={styles.dateDay}>{day}</Text>
                       <Text style={styles.dateYear}>{yr}</Text>
                     </View>
                     <View style={styles.itemDescWrap}>
-                      <Text style={[styles.itemDesc, { fontWeight: '700', color: '#111827' }]} numberOfLines={1}>{a.patient}</Text>
-                      <Text style={styles.itemDesc} numberOfLines={2}>{a.time}{a.notes ? ` • ${a.notes}` : ''}</Text>
+                      <Text
+                        style={[
+                          styles.itemDesc,
+                          { fontWeight: '700', color: '#111827' },
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {a.patient}
+                      </Text>
+                      <Text style={styles.itemDesc} numberOfLines={2}>
+                        {a.time}
+                        {a.notes ? ` • ${a.notes}` : ''}
+                      </Text>
                     </View>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                      <TouchableOpacity onPress={() => { setReminderTarget(a); setShowReminderPicker(true); }}>
-                        <Image source={require('../../assets/notification_icon.png')} style={styles.reminderIcon} resizeMode="contain" />
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 8,
+                      }}
+                    >
+                      <TouchableOpacity
+                        onPress={() => {
+                          setReminderTarget(a);
+                          setShowReminderPicker(true);
+                        }}
+                      >
+                        <Image
+                          source={require('../../assets/notification_icon.png')}
+                          style={styles.reminderIcon}
+                          resizeMode="contain"
+                        />
                       </TouchableOpacity>
                       <TouchableOpacity onPress={() => confirmDelete(idx)}>
-                        <Image source={require('../../assets/delete_icon.png')} style={styles.deleteIcon} resizeMode="contain" />
+                        <Image
+                          source={require('../../assets/delete_icon.png')}
+                          style={styles.deleteIcon}
+                          resizeMode="contain"
+                        />
                       </TouchableOpacity>
                     </View>
                   </TouchableOpacity>
@@ -671,22 +1109,63 @@ export default function DoctorAppointment() {
 
         {/* Bottom Bar */}
         <View style={styles.bottomBar}>
-          <BottomItem label="Home" source={require('../../assets/home_icon.png')} onPress={() => navigation.navigate('DoctorDashboard')} />
-          <BottomItem label="Appointment" active source={require('../../assets/appointment_icon.png')} onPress={() => navigation.navigate('DoctorAppointment')} />
-          <BottomItem label="Prescription" source={require('../../assets/prescription_icon.png')} onPress={() => navigation.navigate('DoctorPrescription')} />
-          <BottomItem label="P-Records" source={require('../../assets/patient_records_icon.png')} onPress={() => navigation.navigate('DoctorPatientRecords')} />
-          <BottomItem label="Reports" source={require('../../assets/reports_icon.png')} onPress={() => navigation.navigate('DoctorReports')} />
+          <BottomItem
+            label="Home"
+            source={require('../../assets/home_icon.png')}
+            onPress={() => navigation.navigate('DoctorDashboard')}
+          />
+          <BottomItem
+            label="Appointment"
+            active
+            source={require('../../assets/appointment_icon.png')}
+            onPress={() => navigation.navigate('DoctorAppointment')}
+          />
+          <BottomItem
+            label="Prescription"
+            source={require('../../assets/prescription_icon.png')}
+            onPress={() => navigation.navigate('DoctorPrescription')}
+          />
+          <BottomItem
+            label="P-Records"
+            source={require('../../assets/patient_records_icon.png')}
+            onPress={() => navigation.navigate('DoctorPatientRecords')}
+          />
+          <BottomItem
+            label="Reports"
+            source={require('../../assets/reports_icon.png')}
+            onPress={() => navigation.navigate('DoctorReports')}
+          />
         </View>
         {showProfileMenu && (
           <View style={styles.dropdownOverlay}>
-            <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowProfileMenu(false)} />
-            <View style={[styles.dropdownCard, { top: insets.top + 48, right: 16 }]}> 
-              <TouchableOpacity style={styles.dropdownItem} onPress={() => { setShowProfileMenu(false); navigation.navigate('DoctorProfile'); }}>
+            <TouchableOpacity
+              style={{ flex: 1 }}
+              activeOpacity={1}
+              onPress={() => setShowProfileMenu(false)}
+            />
+            <View
+              style={[styles.dropdownCard, { top: insets.top + 48, right: 16 }]}
+            >
+              <TouchableOpacity
+                style={styles.dropdownItem}
+                onPress={() => {
+                  setShowProfileMenu(false);
+                  navigation.navigate('DoctorProfile');
+                }}
+              >
                 <Text style={styles.dropdownText}>Profile</Text>
               </TouchableOpacity>
               <View style={styles.menuDivider} />
-              <TouchableOpacity style={styles.dropdownItem} onPress={() => { setShowProfileMenu(false); navigation.reset({ index: 0, routes: [{ name: 'Login' }] }); }}>
-                <Text style={[styles.dropdownText, { color: '#EF4444' }]}>Logout</Text>
+              <TouchableOpacity
+                style={styles.dropdownItem}
+                onPress={() => {
+                  setShowProfileMenu(false);
+                  navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+                }}
+              >
+                <Text style={[styles.dropdownText, { color: '#EF4444' }]}>
+                  Logout
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -694,12 +1173,20 @@ export default function DoctorAppointment() {
       </View>
 
       {/* Reminder Picker Modal */}
-      <Modal visible={showReminderPicker} animationType="fade" transparent onRequestClose={() => setShowReminderPicker(false)}>
+      <Modal
+        visible={showReminderPicker}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setShowReminderPicker(false)}
+      >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Set Reminder</Text>
-              <TouchableOpacity style={styles.closeBtn} onPress={() => setShowReminderPicker(false)}>
+              <TouchableOpacity
+                style={styles.closeBtn}
+                onPress={() => setShowReminderPicker(false)}
+              >
                 <Text style={styles.closeText}>×</Text>
               </TouchableOpacity>
             </View>
@@ -716,7 +1203,7 @@ export default function DoctorAppointment() {
                   style={styles.input}
                 />
               </View>
-              <View style={[styles.modalActions, { marginTop: 6 }]}> 
+              <View style={[styles.modalActions, { marginTop: 6 }]}>
                 <TouchableOpacity
                   style={[styles.actionBtn, styles.cancelBtn]}
                   onPress={() => setShowReminderPicker(false)}
@@ -727,8 +1214,19 @@ export default function DoctorAppointment() {
                   style={[styles.actionBtn, styles.saveBtn]}
                   onPress={async () => {
                     const mins = parseInt(customMinutesInput, 10);
-                    if (!Number.isFinite(mins) || mins <= 0) { Alert.alert('Reminder', 'Enter a valid number of minutes.'); return; }
-                    if (reminderTarget) await setReminderForAppointment(reminderTarget, { near: false, now: false, customMinutes: mins });
+                    if (!Number.isFinite(mins) || mins <= 0) {
+                      Alert.alert(
+                        'Reminder',
+                        'Enter a valid number of minutes.',
+                      );
+                      return;
+                    }
+                    if (reminderTarget)
+                      await setReminderForAppointment(reminderTarget, {
+                        near: false,
+                        now: false,
+                        customMinutes: mins,
+                      });
                     setCustomMinutesInput('');
                     setShowReminderPicker(false);
                   }}
@@ -742,17 +1240,28 @@ export default function DoctorAppointment() {
       </Modal>
 
       {/* New Appointment Modal */}
-      <Modal visible={showNew} animationType="fade" transparent onRequestClose={() => setShowNew(false)}>
+      <Modal
+        visible={showNew}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setShowNew(false)}
+      >
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalCard, { paddingTop: insets.top / 2 }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>New Appointment</Text>
-              <TouchableOpacity style={styles.closeBtn} onPress={() => { setShowNew(false); resetForm(); }}>
+              <TouchableOpacity
+                style={styles.closeBtn}
+                onPress={() => {
+                  setShowNew(false);
+                  resetForm();
+                }}
+              >
                 <Text style={styles.closeText}>×</Text>
               </TouchableOpacity>
             </View>
 
-            <View style={styles.formGroup}> 
+            <View style={styles.formGroup}>
               <Text style={styles.inputLabel}>Patient</Text>
               <TextInput
                 placeholder="Enter patient name"
@@ -763,7 +1272,7 @@ export default function DoctorAppointment() {
               />
             </View>
 
-            <View style={styles.row2}> 
+            <View style={styles.row2}>
               <View style={{ flex: 1, marginRight: 8 }}>
                 <Text style={styles.inputLabel}>Date</Text>
                 <View style={styles.inputWithIcon}>
@@ -774,8 +1283,15 @@ export default function DoctorAppointment() {
                     onChangeText={setDate}
                     style={[styles.input, { paddingRight: 40 }]}
                   />
-                  <TouchableOpacity style={styles.iconOverlay} onPress={() => setShowDatePicker(true)}>
-                    <Image source={require('../../assets/appointment_icon.png')} style={styles.inlineIcon} resizeMode="contain" />
+                  <TouchableOpacity
+                    style={styles.iconOverlay}
+                    onPress={() => setShowDatePicker(true)}
+                  >
+                    <Image
+                      source={require('../../assets/appointment_icon.png')}
+                      style={styles.inlineIcon}
+                      resizeMode="contain"
+                    />
                   </TouchableOpacity>
                 </View>
               </View>
@@ -789,14 +1305,21 @@ export default function DoctorAppointment() {
                     onChangeText={setTime}
                     style={[styles.input, { paddingRight: 40 }]}
                   />
-                  <TouchableOpacity style={styles.iconOverlay} onPress={() => setShowTimePicker(true)}>
-                    <Image source={require('../../assets/time_icon.png')} style={styles.inlineIcon} resizeMode="contain" />
+                  <TouchableOpacity
+                    style={styles.iconOverlay}
+                    onPress={() => setShowTimePicker(true)}
+                  >
+                    <Image
+                      source={require('../../assets/time_icon.png')}
+                      style={styles.inlineIcon}
+                      resizeMode="contain"
+                    />
                   </TouchableOpacity>
                 </View>
               </View>
             </View>
 
-            <View style={styles.formGroup}> 
+            <View style={styles.formGroup}>
               <Text style={styles.inputLabel}>Notes</Text>
               <TextInput
                 placeholder="Optional notes"
@@ -808,11 +1331,20 @@ export default function DoctorAppointment() {
               />
             </View>
 
-            <View style={styles.modalActions}> 
-              <TouchableOpacity style={[styles.actionBtn, styles.cancelBtn]} onPress={() => { setShowNew(false); resetForm(); }}>
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.cancelBtn]}
+                onPress={() => {
+                  setShowNew(false);
+                  resetForm();
+                }}
+              >
                 <Text style={styles.cancelText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.actionBtn, styles.saveBtn]} onPress={onSaveNew}>
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.saveBtn]}
+                onPress={onSaveNew}
+              >
                 <Text style={styles.saveText}>Save</Text>
               </TouchableOpacity>
             </View>
@@ -821,30 +1353,48 @@ export default function DoctorAppointment() {
       </Modal>
 
       {/* Date Picker Modal */}
-      <Modal visible={showDatePicker} transparent animationType="fade" onRequestClose={() => setShowDatePicker(false)}>
+      <Modal
+        visible={showDatePicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowDatePicker(false)}
+      >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Select Date</Text>
-              <TouchableOpacity style={styles.closeBtn} onPress={() => setShowDatePicker(false)}>
+              <TouchableOpacity
+                style={styles.closeBtn}
+                onPress={() => setShowDatePicker(false)}
+              >
                 <Text style={styles.closeText}>×</Text>
               </TouchableOpacity>
             </View>
             <View style={styles.monthRow}>
-              <TouchableOpacity style={styles.navBtn} onPress={() => setCurrent(new Date(year, month - 1, 1))}>
+              <TouchableOpacity
+                style={styles.navBtn}
+                onPress={() => setCurrent(new Date(year, month - 1, 1))}
+              >
                 <Text style={styles.navText}>{'<'}</Text>
               </TouchableOpacity>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <View
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
+              >
                 <Text style={styles.monthText}>{monthNames[month]}</Text>
                 <Text style={styles.yearText}>{year}</Text>
               </View>
-              <TouchableOpacity style={styles.navBtn} onPress={() => setCurrent(new Date(year, month + 1, 1))}>
+              <TouchableOpacity
+                style={styles.navBtn}
+                onPress={() => setCurrent(new Date(year, month + 1, 1))}
+              >
                 <Text style={styles.navText}>{'>'}</Text>
               </TouchableOpacity>
             </View>
             <View style={styles.weekHeader}>
-              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
-                <Text key={d} style={styles.weekText}>{d}</Text>
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+                <Text key={d} style={styles.weekText}>
+                  {d}
+                </Text>
               ))}
             </View>
             <View style={styles.daysGrid}>
@@ -864,17 +1414,21 @@ export default function DoctorAppointment() {
                         if (d) {
                           const mm = String(month + 1).padStart(2, '0');
                           const dd = String(d).padStart(2, '0');
-                          if (pickerTarget === 'new') setDate(`${year}-${mm}-${dd}`); else setDDate(`${year}-${mm}-${dd}`);
+                          if (pickerTarget === 'new')
+                            setDate(`${year}-${mm}-${dd}`);
+                          else setDDate(`${year}-${mm}-${dd}`);
                           setShowDatePicker(false);
                         }
                       }}
                     >
-                      <Text style={[
-                        styles.dayText,
-                        d === null && styles.dayTextEmpty,
-                        isToday(d) && styles.dayTextToday,
-                        isPastCalendarDate(d) && styles.dayTextDisabled,
-                      ]}>
+                      <Text
+                        style={[
+                          styles.dayText,
+                          d === null && styles.dayTextEmpty,
+                          isToday(d) && styles.dayTextToday,
+                          isPastCalendarDate(d) && styles.dayTextDisabled,
+                        ]}
+                      >
                         {d ?? ''}
                       </Text>
                     </TouchableOpacity>
@@ -887,22 +1441,46 @@ export default function DoctorAppointment() {
       </Modal>
 
       {/* Time Picker Modal */}
-      <Modal visible={showTimePicker} transparent animationType="fade" onRequestClose={() => setShowTimePicker(false)}>
+      <Modal
+        visible={showTimePicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowTimePicker(false)}
+      >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Select Time</Text>
-              <TouchableOpacity style={styles.closeBtn} onPress={() => setShowTimePicker(false)}>
+              <TouchableOpacity
+                style={styles.closeBtn}
+                onPress={() => setShowTimePicker(false)}
+              >
                 <Text style={styles.closeText}>×</Text>
               </TouchableOpacity>
             </View>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <View
+              style={{ flexDirection: 'row', justifyContent: 'space-between' }}
+            >
               <View style={{ flex: 1, marginRight: 6 }}>
                 <Text style={styles.inputLabel}>Hour</Text>
                 <View style={styles.timeRow}>
-                  {[1,2,3,4,5,6,7,8,9,10,11,12].map((h) => (
-                    <TouchableOpacity key={h} style={[styles.timePill, tpHour === h && styles.timePillActive]} onPress={() => setTpHour(h)}>
-                      <Text style={[styles.timePillText, tpHour === h && styles.timePillTextActive]}>{h}</Text>
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(h => (
+                    <TouchableOpacity
+                      key={h}
+                      style={[
+                        styles.timePill,
+                        tpHour === h && styles.timePillActive,
+                      ]}
+                      onPress={() => setTpHour(h)}
+                    >
+                      <Text
+                        style={[
+                          styles.timePillText,
+                          tpHour === h && styles.timePillTextActive,
+                        ]}
+                      >
+                        {h}
+                      </Text>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -910,23 +1488,61 @@ export default function DoctorAppointment() {
               <View style={{ flex: 1, marginLeft: 6 }}>
                 <Text style={styles.inputLabel}>Minute</Text>
                 <View style={styles.timeRow}>
-                  {[0,5,10,15,20,25,30,35,40,45,50,55].map((m) => (
-                    <TouchableOpacity key={m} style={[styles.timePill, tpMinute === m && styles.timePillActive]} onPress={() => setTpMinute(m)}>
-                      <Text style={[styles.timePillText, tpMinute === m && styles.timePillTextActive]}>{String(m).padStart(2,'0')}</Text>
+                  {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map(m => (
+                    <TouchableOpacity
+                      key={m}
+                      style={[
+                        styles.timePill,
+                        tpMinute === m && styles.timePillActive,
+                      ]}
+                      onPress={() => setTpMinute(m)}
+                    >
+                      <Text
+                        style={[
+                          styles.timePillText,
+                          tpMinute === m && styles.timePillTextActive,
+                        ]}
+                      >
+                        {String(m).padStart(2, '0')}
+                      </Text>
                     </TouchableOpacity>
                   ))}
                 </View>
               </View>
             </View>
-            <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: 10 }}>
-              {(['AM','PM'] as const).map((p) => (
-                <TouchableOpacity key={p} style={[styles.timePill, { marginHorizontal: 6 }, tpPeriod === p && styles.timePillActive]} onPress={() => setTpPeriod(p)}>
-                  <Text style={[styles.timePillText, tpPeriod === p && styles.timePillTextActive]}>{p}</Text>
+            <View
+              style={{
+                flexDirection: 'row',
+                justifyContent: 'center',
+                marginTop: 10,
+              }}
+            >
+              {(['AM', 'PM'] as const).map(p => (
+                <TouchableOpacity
+                  key={p}
+                  style={[
+                    styles.timePill,
+                    { marginHorizontal: 6 },
+                    tpPeriod === p && styles.timePillActive,
+                  ]}
+                  onPress={() => setTpPeriod(p)}
+                >
+                  <Text
+                    style={[
+                      styles.timePillText,
+                      tpPeriod === p && styles.timePillTextActive,
+                    ]}
+                  >
+                    {p}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </View>
-            <View style={[styles.modalActions, { marginTop: 16 }]}> 
-              <TouchableOpacity style={[styles.actionBtn, styles.cancelBtn]} onPress={() => setShowTimePicker(false)}>
+            <View style={[styles.modalActions, { marginTop: 16 }]}>
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.cancelBtn]}
+                onPress={() => setShowTimePicker(false)}
+              >
                 <Text style={styles.cancelText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -940,18 +1556,28 @@ export default function DoctorAppointment() {
                     if (!targetDate) return false;
                     const [y, m, d] = targetDate.split('-').map(Number);
                     const dt = new Date(y, (m || 1) - 1, d || 1);
-                    return dt.getFullYear() === today.getFullYear() && dt.getMonth() === today.getMonth() && dt.getDate() === today.getDate();
+                    return (
+                      dt.getFullYear() === today.getFullYear() &&
+                      dt.getMonth() === today.getMonth() &&
+                      dt.getDate() === today.getDate()
+                    );
                   })();
                   if (selIsToday) {
                     const sel24 = (tpHour % 12) + (tpPeriod === 'PM' ? 12 : 0);
                     const selMinutes = sel24 * 60 + tpMinute;
-                    const nowMinutes = today.getHours() * 60 + today.getMinutes();
+                    const nowMinutes =
+                      today.getHours() * 60 + today.getMinutes();
                     if (selMinutes <= nowMinutes) {
-                      Alert.alert('Invalid time', 'Please select a future time.');
+                      Alert.alert(
+                        'Invalid time',
+                        'Please select a future time.',
+                      );
                       return;
                     }
                   }
-                  if (pickerTarget === 'new') setTime(`${hh}:${mm} ${tpPeriod}`); else setDTime(`${hh}:${mm} ${tpPeriod}`);
+                  if (pickerTarget === 'new')
+                    setTime(`${hh}:${mm} ${tpPeriod}`);
+                  else setDTime(`${hh}:${mm} ${tpPeriod}`);
                   setShowTimePicker(false);
                 }}
               >
@@ -963,17 +1589,25 @@ export default function DoctorAppointment() {
       </Modal>
 
       {/* Appointment Detail Modal */}
-      <Modal visible={showDetail} animationType="fade" transparent onRequestClose={() => setShowDetail(false)}>
+      <Modal
+        visible={showDetail}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setShowDetail(false)}
+      >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Appointment Details</Text>
-              <TouchableOpacity style={styles.closeBtn} onPress={() => setShowDetail(false)}>
+              <TouchableOpacity
+                style={styles.closeBtn}
+                onPress={() => setShowDetail(false)}
+              >
                 <Text style={styles.closeText}>×</Text>
               </TouchableOpacity>
             </View>
 
-            <View style={styles.formGroup}> 
+            <View style={styles.formGroup}>
               <Text style={styles.inputLabel}>Patient</Text>
               <TextInput
                 placeholder="Enter patient name"
@@ -984,7 +1618,7 @@ export default function DoctorAppointment() {
               />
             </View>
 
-            <View style={styles.row2}> 
+            <View style={styles.row2}>
               <View style={{ flex: 1, marginRight: 8 }}>
                 <Text style={styles.inputLabel}>Date</Text>
                 <View style={styles.inputWithIcon}>
@@ -995,8 +1629,18 @@ export default function DoctorAppointment() {
                     onChangeText={setDDate}
                     style={[styles.input, { paddingRight: 40 }]}
                   />
-                  <TouchableOpacity style={styles.iconOverlay} onPress={() => { setPickerTarget('detail'); setShowDatePicker(true); }}>
-                    <Image source={require('../../assets/appointment_icon.png')} style={styles.inlineIcon} resizeMode="contain" />
+                  <TouchableOpacity
+                    style={styles.iconOverlay}
+                    onPress={() => {
+                      setPickerTarget('detail');
+                      setShowDatePicker(true);
+                    }}
+                  >
+                    <Image
+                      source={require('../../assets/appointment_icon.png')}
+                      style={styles.inlineIcon}
+                      resizeMode="contain"
+                    />
                   </TouchableOpacity>
                 </View>
               </View>
@@ -1010,14 +1654,24 @@ export default function DoctorAppointment() {
                     onChangeText={setDTime}
                     style={[styles.input, { paddingRight: 40 }]}
                   />
-                  <TouchableOpacity style={styles.iconOverlay} onPress={() => { setPickerTarget('detail'); setShowTimePicker(true); }}>
-                    <Image source={require('../../assets/time_icon.png')} style={styles.inlineIcon} resizeMode="contain" />
+                  <TouchableOpacity
+                    style={styles.iconOverlay}
+                    onPress={() => {
+                      setPickerTarget('detail');
+                      setShowTimePicker(true);
+                    }}
+                  >
+                    <Image
+                      source={require('../../assets/time_icon.png')}
+                      style={styles.inlineIcon}
+                      resizeMode="contain"
+                    />
                   </TouchableOpacity>
                 </View>
               </View>
             </View>
 
-            <View style={styles.formGroup}> 
+            <View style={styles.formGroup}>
               <Text style={styles.inputLabel}>Notes</Text>
               <TextInput
                 placeholder="Optional notes"
@@ -1029,11 +1683,19 @@ export default function DoctorAppointment() {
               />
             </View>
 
-            <View style={[styles.modalActions, { alignItems: 'center' }]}> 
-              <TouchableOpacity style={[styles.actionBtn, styles.cancelBtn]} onPress={() => setShowDetail(false)}>
-                <Text style={styles.cancelText}>Cancel</Text>
+            <View style={[styles.modalActions, { alignItems: 'center' }]}>
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.saveBtn]}
+                onPress={() => {
+                  if (detailIndex !== null) confirmDone(detailIndex);
+                }}
+              >
+                <Text style={styles.saveText}>Done</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.actionBtn, styles.saveBtn]} onPress={onUpdateDetail}>
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.saveBtn]}
+                onPress={onUpdateDetail}
+              >
                 <Text style={styles.saveText}>Update</Text>
               </TouchableOpacity>
             </View>
@@ -1044,11 +1706,31 @@ export default function DoctorAppointment() {
   );
 }
 
-function BottomItem({ label, active, source, onPress }: { label: string; active?: boolean; source: any; onPress?: () => void }) {
+function BottomItem({
+  label,
+  active,
+  source,
+  onPress,
+}: {
+  label: string;
+  active?: boolean;
+  source: any;
+  onPress?: () => void;
+}) {
   return (
-    <TouchableOpacity style={styles.bottomItem} activeOpacity={0.85} onPress={onPress}>
-      <Image source={source} style={[styles.bottomImg, { tintColor: active ? GREEN : MUTED }]} resizeMode="contain" />
-      <Text style={[styles.bottomLabel, active && { color: GREEN }]}>{label}</Text>
+    <TouchableOpacity
+      style={styles.bottomItem}
+      activeOpacity={0.8}
+      onPress={onPress}
+    >
+      <Image
+        source={source}
+        style={[styles.bottomImg, { tintColor: active ? GREEN : MUTED }]}
+        resizeMode="contain"
+      />
+      <Text style={[styles.bottomLabel, active && { color: GREEN }]}>
+        {label}
+      </Text>
     </TouchableOpacity>
   );
 }
@@ -1068,7 +1750,14 @@ const styles = StyleSheet.create({
   iconBtn: { padding: 8 },
   headerIconImg: { width: 20, height: 20, tintColor: GREEN },
   avatarBtn: { padding: 4 },
-  avatarCircle: { width: 28, height: 28, borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: GREEN },
+  avatarCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: GREEN,
+  },
   avatarImg: { width: '100%', height: '100%' },
   divider: { height: 1, backgroundColor: BORDER },
   scrollContent: { paddingHorizontal: 16, paddingBottom: 90 },
@@ -1080,7 +1769,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
     marginBottom: 8,
   },
-  screenTitle: { color: GREEN, fontWeight: '700', fontSize: 16 },
+  screenTitle: { color: '#000000', fontWeight: '700', fontSize: 16 },
   plus: { color: GREEN, fontSize: 22, fontWeight: '700' },
 
   calendarBlock: {
@@ -1090,16 +1779,36 @@ const styles = StyleSheet.create({
     padding: 10,
     backgroundColor: '#FFFFFF',
   },
-  monthRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
+  monthRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
   monthText: { fontSize: 18, color: '#111827' },
   yearText: { fontSize: 18, color: '#111827' },
   navBtn: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
-  navText: { fontSize: 16, color: GREEN, fontWeight: '700' },
-  weekHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
-  weekText: { width: `${100 / 7}%`, textAlign: 'center', color: MUTED, fontSize: 12 },
+  navText: { fontSize: 16, color: '#000000', fontWeight: '700' },
+  weekHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  weekText: {
+    width: `${100 / 7}%`,
+    textAlign: 'center',
+    color: MUTED,
+    fontSize: 12,
+  },
   daysGrid: { flexDirection: 'column' },
   weekRow: { flexDirection: 'row' },
-  dayCell: { width: `${100 / 7}%`, height: 36, alignItems: 'center', justifyContent: 'center', borderWidth: 0.5, borderColor: BORDER },
+  dayCell: {
+    width: `${100 / 7}%`,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 0.5,
+    borderColor: BORDER,
+  },
   dayCellEmpty: { backgroundColor: '#F9FAFB' },
   dayCellToday: { borderColor: GREEN, borderWidth: 1.5, borderRadius: 6 },
   dayText: { color: '#111827', fontSize: 12 },
@@ -1115,7 +1824,7 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   listHeader: { alignItems: 'center', marginBottom: 8 },
-  listTitle: { color: GREEN, fontWeight: '700' },
+  listTitle: { color: '#000000', fontWeight: '700' },
   listItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1123,25 +1832,58 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderColor: BORDER,
   },
-  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 1, borderColor: GREEN, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#000000',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
   checkboxChecked: { backgroundColor: GREEN },
-  checkboxTick: { color: '#FFFFFF', fontSize: 14, lineHeight: 14, fontWeight: '700' },
-  dateCol: { width: 56, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E5F7F0', paddingVertical: 6, borderRadius: 6 },
+  checkboxTick: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    lineHeight: 14,
+    fontWeight: '700',
+  },
+  dateCol: {
+    width: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#E5F7F0',
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
   dateMon: { color: '#111827', fontWeight: '700', fontSize: 10 },
-  dateDay: { color: '#111827', fontWeight: '700', fontSize: 16, lineHeight: 18 },
+  dateDay: {
+    color: '#111827',
+    fontWeight: '700',
+    fontSize: 16,
+    lineHeight: 18,
+  },
   dateYear: { color: '#111827', fontWeight: '700', fontSize: 10 },
   itemDescWrap: { flex: 1, paddingHorizontal: 12 },
   itemDesc: { color: MUTED, fontSize: 12 },
   reminderIcon: { width: 20, height: 20, tintColor: GREEN },
   deleteIcon: { width: 20, height: 20, tintColor: '#EF4444', marginLeft: 12 },
-  listRowEmpty: { height: 42, borderTopWidth: 1, borderColor: BORDER, backgroundColor: '#EAF6F1', borderRadius: 6, marginTop: 6 },
+  listRowEmpty: {
+    height: 42,
+    borderTopWidth: 1,
+    borderColor: BORDER,
+    backgroundColor: '#EAF6F1',
+    borderRadius: 6,
+    marginTop: 6,
+  },
 
   bottomBar: {
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 45,
-    height: 64,
+    bottom: 0,
+    height: 80,
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
     borderTopColor: BORDER,
@@ -1150,18 +1892,56 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   bottomItem: { alignItems: 'center', justifyContent: 'center' },
-  bottomImg: { width: 22, height: 22, marginBottom: 4 },
+  bottomImg: { width: 26, height: 26, marginBottom: 4 },
   bottomLabel: { fontSize: 10, color: MUTED },
   // Dropdown styles
-  dropdownOverlay: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
-  dropdownCard: { position: 'absolute', width: 180, backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: BORDER, paddingVertical: 6, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 8, elevation: 3 },
+  dropdownOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+  },
+  dropdownCard: {
+    position: 'absolute',
+    width: 180,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: BORDER,
+    paddingVertical: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+  },
   dropdownItem: { paddingVertical: 10, paddingHorizontal: 12 },
   dropdownText: { color: '#111827', fontWeight: '700' },
   menuDivider: { height: 1, backgroundColor: BORDER },
   // Reminder banner styles
-  reminderBanner: { position: 'absolute', left: 16, right: 16, paddingVertical: 10, paddingHorizontal: 12, backgroundColor: '#ECFDF5', borderRadius: 12, borderWidth: 1, borderColor: '#A7F3D0', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', zIndex: 20 },
+  reminderBanner: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#ECFDF5',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    zIndex: 20,
+  },
   reminderText: { color: GREEN, fontWeight: '700' },
-  reminderClose: { color: GREEN, fontWeight: '800', fontSize: 18, lineHeight: 18, paddingLeft: 8 },
+  reminderClose: {
+    color: GREEN,
+    fontWeight: '800',
+    fontSize: 18,
+    lineHeight: 18,
+    paddingLeft: 8,
+  },
 
   // Modal styles
   modalBackdrop: {
@@ -1200,19 +1980,38 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   inputWithIcon: { position: 'relative' },
-  iconOverlay: { position: 'absolute', right: 8, top: 0, bottom: 0, justifyContent: 'center', alignItems: 'center', width: 32 },
+  iconOverlay: {
+    position: 'absolute',
+    right: 8,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 32,
+  },
   inlineIcon: { width: 18, height: 18, tintColor: GREEN },
   row2: { flexDirection: 'row', marginTop: 10 },
-  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14, gap: 10 },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 14,
+    gap: 10,
+  },
   actionBtn: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 10 },
   cancelBtn: { backgroundColor: '#F3F4F6' },
   saveBtn: { backgroundColor: GREEN },
   cancelText: { color: '#111827', fontWeight: '600' },
   saveText: { color: '#FFFFFF', fontWeight: '700' },
   timeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
-  timePill: { paddingVertical: 6, paddingHorizontal: 10, borderWidth: 1, borderColor: BORDER, borderRadius: 14, backgroundColor: '#FFFFFF' },
+  timePill: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+  },
   timePillActive: { borderColor: GREEN, backgroundColor: '#E6FFF5' },
   timePillText: { color: '#111827' },
   timePillTextActive: { color: GREEN, fontWeight: '700' },
 });
-

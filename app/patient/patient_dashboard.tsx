@@ -8,9 +8,11 @@ import {
   Image,
   FlatList,
   SafeAreaView,
+  RefreshControl,
+  TouchableWithoutFeedback,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RootStackParamList } from '../../navigation/types';
@@ -35,88 +37,309 @@ type MedicalRecord = {
 type PatientDashboardNavigationProp =
   NativeStackNavigationProp<RootStackParamList>;
 
+const API_BASE = 'https://capstone-production-8af8.up.railway.app';
+
 const PatientDashboard = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<PatientDashboardNavigationProp>();
   const [userName, setUserName] = useState('');
+  const [userRole, setUserRole] = useState('Patient');
+  const [menuVisible, setMenuVisible] = useState(false);
   const [upcomingAppointments, setUpcomingAppointments] = useState<
     Appointment[]
   >([]);
   const [recentRecords, setRecentRecords] = useState<MedicalRecord[]>([]);
-
-  useEffect(() => {
-    loadUserData();
-    loadAppointments();
-    loadMedicalRecords();
-  }, []);
+  const [refreshing, setRefreshing] = useState(false);
 
   const loadUserData = async () => {
     try {
       const session = await AsyncStorage.getItem('session');
       if (session) {
         const { user } = JSON.parse(session);
-        setUserName(user?.fullName || 'Patient');
+        const derivedName =
+          user?.full_name ||
+          user?.fullName ||
+          user?.name ||
+          [user?.firstName, user?.lastName].filter(Boolean).join(' ');
+        setUserName(derivedName || 'Patient');
+        const rawRole = user?.role || user?.role_name || user?.roleName;
+        const roleStr = String(rawRole || '').trim();
+        const displayRole = roleStr
+          ? roleStr.charAt(0).toUpperCase() + roleStr.slice(1)
+          : 'Patient';
+        setUserRole(displayRole);
       }
     } catch (error) {
       console.error('Error loading user data:', error);
     }
   };
 
+  const onRefresh = async () => {
+    try {
+      setRefreshing(true);
+      await Promise.all([loadAppointments(), loadMedicalRecords()]);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // Initial load and refresh-on-focus (placed after function declarations)
+
+  const getAuthHeaders = React.useCallback(async () => {
+    try {
+      const raw = await AsyncStorage.getItem('session');
+      const base = { 'Content-Type': 'application/json' } as Record<
+        string,
+        string
+      >;
+      if (!raw) return base;
+      const sess = JSON.parse(raw);
+      const token = sess?.token || sess?.user?.token || sess?.accessToken;
+      const userId = sess?.user?.id || sess?.id;
+      const withAuth = token
+        ? { ...base, Authorization: `Bearer ${token}` }
+        : base;
+      return userId ? { ...withAuth, 'X-User-Id': String(userId) } : withAuth;
+    } catch {
+      return { 'Content-Type': 'application/json' } as Record<string, string>;
+    }
+  }, []);
+
+  const getCurrentUserName = React.useCallback(async (): Promise<
+    string | undefined
+  > => {
+    try {
+      const raw = await AsyncStorage.getItem('session');
+      if (!raw) return undefined;
+      const sess = JSON.parse(raw);
+      return (
+        sess?.user?.full_name ||
+        sess?.user?.fullName ||
+        sess?.user?.name ||
+        sess?.full_name ||
+        sess?.name
+      );
+    } catch {
+      return undefined;
+    }
+  }, []);
+
+  const getCurrentUserId = React.useCallback(async (): Promise<
+    string | number | undefined
+  > => {
+    try {
+      const raw = await AsyncStorage.getItem('session');
+      if (!raw) return undefined;
+      const sess = JSON.parse(raw);
+      return sess?.user?.id ?? sess?.id ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }, []);
+
   const loadAppointments = async () => {
-    // Mock data - replace with actual API call
-    const mockAppointments: Appointment[] = [
-      {
-        id: '1',
-        doctor: 'Dr. Sarah Johnson',
-        specialty: 'Cardiology',
-        date: '2023-12-15',
-        time: '10:30 AM',
-        status: 'upcoming',
-      },
-      {
-        id: '2',
-        doctor: 'Dr. Michael Chen',
-        specialty: 'General Medicine',
-        date: '2023-12-20',
-        time: '02:15 PM',
-        status: 'upcoming',
-      },
-    ];
-    setUpcomingAppointments(mockAppointments);
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`${API_BASE}/api/appointments`, { headers });
+      if (!res.ok) return setUpcomingAppointments([]);
+      const arr = await res.json();
+      const myName = await getCurrentUserName();
+      const myId = await getCurrentUserId();
+      const list = Array.isArray(arr) ? arr : [];
+      const nameMatches = (pRaw: string, meRaw: string) => {
+        const p = String(pRaw || '')
+          .toLowerCase()
+          .trim();
+        const me = String(meRaw || '')
+          .toLowerCase()
+          .trim();
+        if (!p || !me) return false;
+        if (p === me) return true;
+        const meTokens = me.split(/\s+/).filter(Boolean);
+        if (meTokens.length > 0 && meTokens.every(t => p.includes(t)))
+          return true;
+        const pTokens = p.split(/\s+/).filter(Boolean);
+        if (pTokens.length > 0 && pTokens.every(t => me.includes(t)))
+          return true;
+        return false;
+      };
+      const mine = list.filter((a: any) => {
+        const pid = a?.patientId ?? a?.patient_id;
+        if (pid != null && myId != null) {
+          return String(pid) === String(myId);
+        }
+        return nameMatches(String(a?.patient || ''), String(myName || ''));
+      });
+      const mapped: Appointment[] = mine.map((a: any) => ({
+        id: String(
+          a?.id ?? `${a?.patient || ''}-${a?.date || ''}-${a?.time || ''}`,
+        ),
+        doctor: String(a?.createdByName || a?.created_by_name || 'Doctor'),
+        specialty: String(a?.specialty || ''),
+        date: String(a?.date || ''),
+        time: String(a?.time || ''),
+        status: a?.done ? 'completed' : 'upcoming',
+      }));
+      const upcomingOnly = mapped.filter(m => m.status === 'upcoming');
+      setUpcomingAppointments(upcomingOnly);
+    } catch {
+      setUpcomingAppointments([]);
+    }
   };
 
   const loadMedicalRecords = async () => {
-    // Mock data - replace with actual API call
-    const mockRecords: MedicalRecord[] = [
-      {
-        id: '1',
-        title: 'Blood Test Results',
-        date: '2023-11-20',
-        type: 'lab_result',
-      },
-      {
-        id: '2',
-        title: 'Prescription - Amoxicillin',
-        date: '2023-11-15',
-        type: 'prescription',
-      },
-      {
-        id: '3',
-        title: 'Annual Checkup',
-        date: '2023-10-05',
-        type: 'consultation',
-      },
-    ];
-    setRecentRecords(mockRecords);
+    try {
+      const headers = await getAuthHeaders();
+      const myName = (await getCurrentUserName()) || '';
+      const nameMatches = (pRaw: string, meRaw: string) => {
+        const p = String(pRaw || '')
+          .toLowerCase()
+          .trim();
+        const me = String(meRaw || '')
+          .toLowerCase()
+          .trim();
+        if (!p || !me) return false;
+        if (p === me) return true;
+        const meTokens = me.split(/\s+/).filter(Boolean);
+        if (meTokens.length > 0 && meTokens.every(t => p.includes(t)))
+          return true;
+        const pTokens = p.split(/\s+/).filter(Boolean);
+        if (pTokens.length > 0 && pTokens.every(t => me.includes(t)))
+          return true;
+        return false;
+      };
+
+      const [resPR, resLab] = await Promise.all([
+        fetch(`${API_BASE}/api/patient-records/all`, { headers }),
+        fetch(`${API_BASE}/api/lab-records`, { headers }),
+      ]);
+
+      const prRows = resPR.ok ? await resPR.json() : [];
+      const labRows = resLab.ok ? await resLab.json() : [];
+
+      let rxRows: any[] = [];
+      try {
+        const resRx = await fetch(`${API_BASE}/api/prescriptions`, { headers });
+        rxRows = resRx.ok ? await resRx.json() : [];
+      } catch {}
+
+      let apptRows: any[] = [];
+      try {
+        const resAppt = await fetch(`${API_BASE}/api/appointments`, {
+          headers,
+        });
+        apptRows = resAppt.ok ? await resAppt.json() : [];
+      } catch {}
+
+      const minePR = (Array.isArray(prRows) ? prRows : []).filter((r: any) =>
+        nameMatches(String(r?.patient || ''), String(myName || '')),
+      );
+      const mineLab = (Array.isArray(labRows) ? labRows : []).filter((r: any) =>
+        nameMatches(String(r?.patient || ''), String(myName || '')),
+      );
+      const mineRx = (Array.isArray(rxRows) ? rxRows : []).filter((r: any) =>
+        nameMatches(String(r?.patient_name || ''), String(myName || '')),
+      );
+      const mineAppt = (Array.isArray(apptRows) ? apptRows : []).filter(
+        (a: any) =>
+          nameMatches(String(a?.patient || ''), String(myName || '')) &&
+          Boolean(a?.done),
+      );
+
+      const mappedPR: MedicalRecord[] = minePR.map((r: any) => {
+        const hasMedicine = !!r?.medicine;
+        const type: MedicalRecord['type'] = hasMedicine
+          ? 'prescription'
+          : 'consultation';
+        const title = hasMedicine
+          ? `Prescription - ${String(r?.medicine || '')}`
+          : 'Consultation';
+        const date = String(r?.date || r?.created_at || '');
+        return {
+          id: String(r?.id || `${r?.patient || ''}-${date}`),
+          title,
+          type,
+          date,
+        };
+      });
+
+      const mappedLab: MedicalRecord[] = mineLab.map((r: any) => {
+        const title = r?.test_name
+          ? `Lab Result - ${String(r.test_name)}`
+          : 'Lab Result';
+        const date = String(r?.date || r?.createdAt || '');
+        return {
+          id: `LAB-${String(r?.id || `${r?.patient || ''}-${date}`)}`,
+          title,
+          type: 'lab_result',
+          date,
+        };
+      });
+
+      const mappedRx: MedicalRecord[] = mineRx.map((r: any) => {
+        const date = String(r?.created_at || r?.createdAt || '');
+        return {
+          id: `RX-${String(r?.id || `${r?.patient_name || ''}-${date}`)}`,
+          title: r?.medicine
+            ? `Prescription - ${String(r.medicine)}`
+            : 'Prescription',
+          type: 'prescription',
+          date,
+        };
+      });
+
+      const mappedAppt: MedicalRecord[] = mineAppt.map((a: any) => {
+        const date = String(a?.date || '');
+        return {
+          id: `APT-${String(
+            a?.id || `${a?.patient || ''}-${a?.date || ''}-${a?.time || ''}`,
+          )}`,
+          title: 'Consultation',
+          type: 'consultation',
+          date,
+        };
+      });
+
+      const combined = [...mappedPR, ...mappedLab, ...mappedRx, ...mappedAppt];
+      combined.sort((a, b) => {
+        const ta = Date.parse(a.date || '') || 0;
+        const tb = Date.parse(b.date || '') || 0;
+        return tb - ta;
+      });
+
+      setRecentRecords(combined.slice(0, 3));
+    } catch {
+      setRecentRecords([]);
+    }
   };
+
+  // Initial load and refresh-on-focus (after function declarations to avoid TS errors)
+  useEffect(() => {
+    loadUserData();
+    loadAppointments();
+    loadMedicalRecords();
+  }, []);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      loadUserData();
+      loadAppointments();
+      loadMedicalRecords();
+      return () => {};
+    }, []),
+  );
 
   const renderAppointmentItem = ({ item }: { item: Appointment }) => {
     const handleAppointmentPress = () => {
-      navigation.navigate('AppointmentDetails', { appointmentId: item.id });
+      navigation.navigate('Appointments');
     };
 
     return (
-      <View style={styles.appointmentCard}>
+      <TouchableOpacity
+        style={styles.appointmentCard}
+        activeOpacity={0.8}
+        onPress={handleAppointmentPress}
+      >
         <View style={styles.appointmentInfoContainer}>
           <Text style={styles.doctorName}>{item.doctor}</Text>
           <Text style={styles.specialty}>{item.specialty}</Text>
@@ -140,13 +363,13 @@ const PatientDashboard = () => {
         >
           <Text style={styles.viewButtonText}>View</Text>
         </TouchableOpacity>
-      </View>
+      </TouchableOpacity>
     );
   };
 
   const renderRecordItem = ({ item }: { item: MedicalRecord }) => {
     const handleRecordPress = () => {
-      navigation.navigate('MedicalRecordDetails', { recordId: item.id });
+      navigation.navigate('MedicalRecords');
     };
 
     return (
@@ -192,156 +415,274 @@ const PatientDashboard = () => {
   };
 
   return (
-    <SafeAreaView style={[styles.container, { paddingTop: insets.top }]}>
-      <ScrollView style={styles.scrollView}>
-        {/* Header */}
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.greeting}>Hello,</Text>
-            <Text style={styles.userName}>{userName}</Text>
-          </View>
-          <TouchableOpacity
-            onPress={() => navigation.navigate('PatientProfile')}
-          >
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>
-                {userName.charAt(0).toUpperCase()}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        </View>
-
-        {/* Quick Actions */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Quick Actions</Text>
-          <View style={styles.quickActions}>
-            <TouchableOpacity
-              style={styles.actionCard}
-              onPress={() => navigation.navigate('BookAppointment')}
-            >
-              <View style={[styles.actionIcon, { backgroundColor: '#EFF6FF' }]}>
-                <Text style={[styles.actionIconText, { color: '#3B82F6' }]}>
-                  📅
-                </Text>
-              </View>
-              <Text style={styles.actionText}>Book Appointment</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.actionCard}
-              onPress={() => navigation.navigate('MedicalRecords')}
-            >
-              <View style={[styles.actionIcon, { backgroundColor: '#F0FDF4' }]}>
-                <Text style={[styles.actionIconText, { color: '#10B981' }]}>
-                  📋
-                </Text>
-              </View>
-              <Text style={styles.actionText}>My Records</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Upcoming Appointments */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Upcoming Appointments</Text>
-            <TouchableOpacity
-              onPress={() => navigation.navigate('Appointments')}
-            >
-              <Text style={styles.seeAll}>See All</Text>
-            </TouchableOpacity>
-          </View>
-
-          {upcomingAppointments.length > 0 ? (
-            <FlatList
-              data={upcomingAppointments}
-              renderItem={renderAppointmentItem}
-              keyExtractor={item => item.id}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.appointmentList}
+    <SafeAreaView style={styles.safe}>
+      <View style={[styles.container, { paddingBottom: 70 }]}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={{ paddingBottom: (insets?.bottom || 0) + 120 }}
+          nestedScrollEnabled
+          keyboardDismissMode="on-drag"
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#10B981']}
+              tintColor="#10B981"
             />
-          ) : (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyStateText}>
-                No upcoming appointments
-              </Text>
+          }
+        >
+          {/* Header */}
+          <View style={styles.header}>
+            <View style={styles.headerLeft}>
+              <Text style={styles.greeting}>Hello,</Text>
+              <Text style={styles.userName}>{userName}</Text>
+            </View>
+            <View style={styles.profileRight}>
               <TouchableOpacity
-                style={styles.bookNowButton}
-                onPress={() => navigation.navigate('BookAppointment')}
+                onPress={() => navigation.navigate('PatientProfile')}
               >
-                <Text style={styles.bookNowText}>Book Now</Text>
+                <View style={styles.avatar}>
+                  <Text style={styles.avatarText}>
+                    {userName.charAt(0).toUpperCase()}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+              <View style={styles.profileTextCol}>
+                <Text style={styles.profileName} numberOfLines={1}>
+                  {userName}
+                </Text>
+                <Text style={styles.profileRole} numberOfLines={1}>
+                  {userRole}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.dropdownBtn}
+                onPress={() => setMenuVisible(v => !v)}
+                activeOpacity={0.7}
+              >
+                <Image
+                  source={require('../../assets/dropdown.png')}
+                  style={styles.dropdownIcon}
+                  resizeMode="contain"
+                />
               </TouchableOpacity>
             </View>
-          )}
-        </View>
-
-        {/* Recent Medical Records */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Recent Medical Records</Text>
-            <TouchableOpacity
-              onPress={() => navigation.navigate('MedicalRecords')}
-            >
-              <Text style={styles.seeAll}>See All</Text>
-            </TouchableOpacity>
           </View>
 
-          {recentRecords.length > 0 ? (
-            <View style={styles.recordsList}>
-              {recentRecords.slice(0, 3).map(record => (
-                <View key={record.id} style={styles.recordItemContainer}>
-                  <View style={styles.recordIcon}>
-                    <Text style={styles.recordIconText}>
-                      {getRecordIcon(record.type)}
-                    </Text>
-                  </View>
-                  <View style={styles.recordDetails}>
-                    <Text style={styles.recordTitle}>{record.title}</Text>
-                    <Text style={styles.recordDate}>{record.date}</Text>
-                  </View>
-                  <TouchableOpacity
-                    style={styles.viewRecordButton}
-                    onPress={() =>
-                      navigation.navigate('MedicalRecordDetails', {
-                        recordId: record.id,
-                      })
-                    }
-                  >
-                    <Text style={styles.viewRecordText}>View</Text>
-                  </TouchableOpacity>
+          {/* Quick Actions */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Quick Actions</Text>
+            <View style={styles.quickActions}>
+              <TouchableOpacity
+                style={styles.actionCard}
+                onPress={() => navigation.navigate('Appointments')}
+              >
+                <View
+                  style={[styles.actionIcon, { backgroundColor: '#EFF6FF' }]}
+                >
+                  <Text style={[styles.actionIconText, { color: '#3B82F6' }]}>
+                    📅
+                  </Text>
                 </View>
-              ))}
-            </View>
-          ) : (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyStateText}>
-                No medical records found
-              </Text>
-            </View>
-          )}
-        </View>
+                <Text style={styles.actionText}>Appointment</Text>
+              </TouchableOpacity>
 
-        {/* Emergency Section */}
-        <View style={styles.emergencySection}>
-          <View style={styles.emergencyContent}>
-            <View>
-              <Text style={styles.emergencyTitle}>Medical Emergency?</Text>
-              <Text style={styles.emergencyText}>
-                Call emergency services immediately
-              </Text>
+              <TouchableOpacity
+                style={styles.actionCard}
+                onPress={() => navigation.navigate('MedicalRecords')}
+              >
+                <View
+                  style={[styles.actionIcon, { backgroundColor: '#F0FDF4' }]}
+                >
+                  <Text style={[styles.actionIconText, { color: '#10B981' }]}>
+                    📋
+                  </Text>
+                </View>
+                <Text style={styles.actionText}>My Records</Text>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity style={styles.emergencyButton}>
-              <Text style={styles.emergencyButtonText}>Call 911</Text>
-            </TouchableOpacity>
           </View>
-        </View>
-      </ScrollView>
+
+          {/* Upcoming Appointments */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Upcoming Appointments</Text>
+              <TouchableOpacity
+                onPress={() => navigation.navigate('Appointments')}
+              >
+                <Text style={styles.seeAll}>See All</Text>
+              </TouchableOpacity>
+            </View>
+
+            {upcomingAppointments.length > 0 ? (
+              <FlatList
+                data={upcomingAppointments}
+                renderItem={renderAppointmentItem}
+                keyExtractor={item => item.id}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.appointmentList}
+              />
+            ) : (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyStateText}>
+                  No upcoming appointments
+                </Text>
+                <TouchableOpacity
+                  style={styles.bookNowButton}
+                  onPress={() => navigation.navigate('BookAppointment')}
+                >
+                  <Text style={styles.bookNowText}>Book Now</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+
+          {/* Recent Medical Records */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Recent Medical Records</Text>
+              <TouchableOpacity
+                onPress={() => navigation.navigate('MedicalRecords')}
+              >
+                <Text style={styles.seeAll}>See All</Text>
+              </TouchableOpacity>
+            </View>
+
+            {recentRecords.length > 0 ? (
+              <View style={styles.recordsList}>
+                {recentRecords.map(record => (
+                  <TouchableOpacity
+                    key={record.id}
+                    style={styles.recordItemContainer}
+                    activeOpacity={0.8}
+                    onPress={() => navigation.navigate('MedicalRecords')}
+                  >
+                    <View style={styles.recordIcon}>
+                      <Text style={styles.recordIconText}>
+                        {getRecordIcon(record.type)}
+                      </Text>
+                    </View>
+                    <View style={styles.recordDetails}>
+                      <Text style={styles.recordTitle}>{record.title}</Text>
+                      <Text style={styles.recordDate}>{record.date}</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.viewRecordButton}
+                      onPress={() => navigation.navigate('MedicalRecords')}
+                    >
+                      <Text style={styles.viewRecordText}>View</Text>
+                    </TouchableOpacity>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyStateText}>
+                  No medical records found
+                </Text>
+              </View>
+            )}
+          </View>
+        </ScrollView>
+      </View>
+      {menuVisible && (
+        <TouchableWithoutFeedback onPress={() => setMenuVisible(false)}>
+          <View style={styles.menuOverlay}>
+            <View style={styles.menuContainer}>
+              <TouchableOpacity
+                style={styles.menuItem}
+                onPress={() => {
+                  setMenuVisible(false);
+                  navigation.navigate('PatientProfile');
+                }}
+              >
+                <Text style={styles.menuItemText}>Profile</Text>
+              </TouchableOpacity>
+              <View style={styles.menuDivider} />
+              <TouchableOpacity
+                style={styles.menuItem}
+                onPress={async () => {
+                  try {
+                    await AsyncStorage.removeItem('session');
+                  } catch {}
+                  setMenuVisible(false);
+                  // @ts-ignore
+                  navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+                }}
+              >
+                <Text style={styles.menuItemText}>Logout</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableWithoutFeedback>
+      )}
+      {/* Bottom Navigation */}
+      <View style={[styles.bottomNav, { paddingBottom: insets.bottom }]}>
+        <BottomItem
+          label="Home"
+          active={true}
+          source={require('../../assets/home_icon.png')}
+          onPress={() => navigation.navigate('PatientDashboard')}
+        />
+        <BottomItem
+          label="Appointments"
+          active={false}
+          source={require('../../assets/appointment_icon.png')}
+          onPress={() => navigation.navigate('Appointments')}
+        />
+        <BottomItem
+          label="Prescription"
+          active={false}
+          source={require('../../assets/prescription_icon.png')}
+          onPress={() => navigation.navigate('PatientPrescription')}
+        />
+        <BottomItem
+          label="Records"
+          active={false}
+          source={require('../../assets/patient_records_icon.png')}
+          onPress={() => navigation.navigate('MedicalRecords')}
+        />
+      </View>
     </SafeAreaView>
   );
 };
 
+// Bottom Navigation Item Component
+function BottomItem({
+  label,
+  active,
+  source,
+  onPress,
+}: {
+  label: string;
+  active?: boolean;
+  source: any;
+  onPress?: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={styles.bottomItem}
+      activeOpacity={0.7}
+      onPress={onPress}
+    >
+      <Image
+        source={source}
+        style={[
+          styles.bottomImg,
+          { tintColor: active ? '#10B981' : '#9CA3AF' },
+        ]}
+        resizeMode="contain"
+      />
+      <Text style={[styles.bottomLabel, active && { color: '#10B981' }]}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
 const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: '#FFFFFF' },
   container: {
     flex: 1,
     backgroundColor: '#F9FAFB',
@@ -350,6 +691,33 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 16,
   },
+  // Top Navigation (matches doctor top bar)
+  topHeader: {
+    flexDirection: 'row',
+    marginTop: 10,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 20,
+    backgroundColor: '#FFFFFF',
+  },
+  topHeaderLogo: { width: 40, height: 40 },
+  topHeaderIcons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 12,
+  },
+  topAvatarBtn: { padding: 4 },
+  topAvatarCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#10B981',
+  },
+  topAvatarImg: { width: '100%', height: '100%' },
+  topDivider: { height: 1, backgroundColor: '#E5E7EB' },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -357,6 +725,7 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   greeting: {
+    marginTop: 0,
     fontSize: 16,
     color: '#6B7280',
   },
@@ -364,15 +733,45 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '700',
     color: '#111827',
-    marginTop: 4,
+    marginTop: 0,
+  },
+  headerLeft: {
+    justifyContent: 'center',
+    minHeight: 50,
+  },
+  profileRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    marginTop: 0,
+    maxWidth: '50%',
+  },
+  profileName: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#374151',
+    marginLeft: 0,
+    maxWidth: 140,
+    textAlign: 'left',
+  },
+  profileTextCol: {
+    flexDirection: 'column',
+    marginLeft: 8,
+    justifyContent: 'center',
+  },
+  profileRole: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 2,
   },
   avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 50,
+    height: 50,
+    borderRadius: 30,
     backgroundColor: '#10B981',
     justifyContent: 'center',
     alignItems: 'center',
+    marginTop: 0,
   },
   avatarText: {
     color: '#FFFFFF',
@@ -393,11 +792,62 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#111827',
   },
+  dropdownBtn: {
+    marginLeft: 8,
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dropdownBtnText: {
+    fontSize: 14,
+    color: '#374151',
+  },
+  dropdownIcon: {
+    width: 12,
+    height: 12,
+    tintColor: '#374151',
+  },
+  // Bottom Navigation Styles
+  bottomNav: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingVertical: 8,
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 80,
+  },
+  bottomItem: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: 1,
+    paddingVertical: 8,
+    height: '100%',
+  },
+  bottomImg: {
+    width: 24,
+    height: 24,
+    marginBottom: 4,
+  },
+  bottomLabel: {
+    fontSize: 12,
+    color: '#6B7280',
+    textAlign: 'center',
+  },
   seeAll: {
     color: '#10B981',
     fontWeight: '500',
   },
   quickActions: {
+    marginTop: 20,
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginBottom: 8,
@@ -582,37 +1032,41 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '500',
   },
-  emergencySection: {
-    backgroundColor: '#FEF2F2',
-    borderRadius: 12,
-    padding: 16,
-    marginTop: 8,
-    marginBottom: 32,
+  menuOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'transparent',
+    justifyContent: 'flex-start',
+    alignItems: 'flex-end',
   },
-  emergencyContent: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  menuContainer: {
+    marginTop: 80,
+    marginRight: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    borderWidth: 0,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 3,
+    overflow: 'hidden',
+    minWidth: 150,
   },
-  emergencyTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#B91C1C',
-    marginBottom: 4,
-  },
-  emergencyText: {
-    fontSize: 13,
-    color: '#6B7280',
-  },
-  emergencyButton: {
-    backgroundColor: '#DC2626',
-    paddingHorizontal: 16,
+  menuItem: {
     paddingVertical: 10,
-    borderRadius: 8,
+    paddingHorizontal: 12,
   },
-  emergencyButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
+  menuItemText: {
+    fontSize: 14,
+    color: '#111827',
+  },
+  menuDivider: {
+    height: 1,
+    backgroundColor: '#E5E7EB',
   },
 });
 

@@ -29,6 +29,9 @@ export default function SplashScreen({ navigation }: Props) {
           case 'doctor':
             navigation.replace('DoctorDashboard' as any);
             return;
+          case 'patient':
+            navigation.replace('PatientDashboard' as any);
+            return;
           default:
             return;
         }

@@ -3,7 +3,7 @@ export type RootStackParamList = {
   Splash: undefined;
   Login: undefined;
   Register: undefined;
-  
+
   // Doctor Screens
   DoctorDashboard: undefined;
   DoctorAppointment: undefined;
@@ -15,16 +15,17 @@ export type RootStackParamList = {
   DoctorEditProfile: undefined;
   DoctorNotification: undefined;
   DoctorRecentActivity: undefined;
-  
+
   // Patient Screens
   PatientDashboard: undefined;
   PatientProfile: undefined;
   BookAppointment: undefined;
   MedicalRecords: undefined;
+  PatientPrescription: undefined;
   Appointments: undefined;
   AppointmentDetails: { appointmentId: string };
   MedicalRecordDetails: { recordId: string };
-  
+
   // Add other screen params here as needed
 };
 
