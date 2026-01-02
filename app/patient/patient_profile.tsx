@@ -149,7 +149,11 @@ const PatientProfile = () => {
             body: JSON.stringify(body),
           });
           if (res.ok) {
-            const row = await res.json();
+            let row: any = {};
+            try {
+              const text = await res.text();
+              row = text ? JSON.parse(text) : {};
+            } catch {}
             const next = {
               name: String(row?.full_name || formData.name || ''),
               email: String(row?.email || formData.email || ''),
@@ -378,21 +382,22 @@ const PatientProfile = () => {
               </TouchableOpacity>
             </View>
           )}
-          <Text style={[styles.userName, compact && { fontSize: 20 }]}>
-            {isEditing ? (
-              <TextInput
-                style={[
-                  styles.input,
-                  styles.nameInput,
-                  compact && { fontSize: 20 },
-                ]}
-                value={formData.name}
-                onChangeText={text => handleChange('name', text)}
-              />
-            ) : (
-              userData.name
-            )}
-          </Text>
+          {isEditing ? (
+            <TextInput
+              style={[
+                styles.userName,
+                styles.nameInput,
+                compact && { fontSize: 20 },
+              ]}
+              value={formData.name}
+              onChangeText={text => handleChange('name', text)}
+              underlineColorAndroid="transparent"
+            />
+          ) : (
+            <Text style={[styles.userName, compact && { fontSize: 20 }]}>
+              {userData.name}
+            </Text>
+          )}
           <Text style={[styles.userEmail, compact && { fontSize: 12 }]}>
             {userData.email}
           </Text>
@@ -769,12 +774,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   nameInput: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: 'bold',
     textAlign: 'center',
     padding: 0,
     borderWidth: 0,
-    borderBottomWidth: 1,
+    borderBottomWidth: 0,
     borderRadius: 0,
   },
   emergencyContact: {
