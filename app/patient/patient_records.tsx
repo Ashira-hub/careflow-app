@@ -82,7 +82,7 @@ const PatientRecords = () => {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [filterMenuVisible, setFilterMenuVisible] = useState(false);
 
-  const API_BASE = 'https://capstone-production-8af8.up.railway.app';
+  const API_BASE = 'https://backend-careflow.vercel.app';
   const getAuthHeaders = React.useCallback(async () => {
     try {
       const raw = await AsyncStorage.getItem('session');

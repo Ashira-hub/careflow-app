@@ -25,7 +25,7 @@ const GREEN = '#10B981';
 const BORDER = '#E5E7EB';
 const MUTED = '#6B7280';
 const CARD_BG = '#F9FAFB';
-const API_BASE = 'https://capstone-production-8af8.up.railway.app';
+const API_BASE = 'https://backend-careflow.vercel.app';
 
 export default function DoctorAppointment() {
   const insets = useSafeAreaInsets();

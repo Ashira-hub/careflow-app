@@ -30,7 +30,7 @@ import {
   scheduleAppointmentNotifications,
 } from '../../utils/notifications';
 
-const API_BASE = 'https://capstone-production-8af8.up.railway.app';
+const API_BASE = 'https://backend-careflow.vercel.app';
 
 type Appointment = {
   id: string;

@@ -19,7 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const BRAND = '#10B981';
-const API_BASE = 'https://capstone-production-8af8.up.railway.app';
+const API_BASE = 'https://backend-careflow.vercel.app';
 
 // Bottom Navigation Item Component
 function BottomItem({

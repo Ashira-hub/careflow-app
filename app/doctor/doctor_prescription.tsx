@@ -84,7 +84,7 @@ export default function DoctorPrescription() {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [patients, setPatients] = useState<string[]>([]);
   const [showPatientPicker, setShowPatientPicker] = useState(false);
-  const API_BASE = 'https://capstone-production-8af8.up.railway.app';
+  const API_BASE = 'https://backend-careflow.vercel.app';
   const [unreadCount, setUnreadCount] = useState(0);
   const [avatarUri, setAvatarUri] = useState<string | undefined>(undefined);
 

@@ -35,7 +35,7 @@ export default function DoctorNotification() {
   const [showDetail, setShowDetail] = useState(false);
   const [detailItem, setDetailItem] = useState<NotificationItem | null>(null);
   const [avatarUri, setAvatarUri] = useState<string | undefined>(undefined);
-  const API_BASE = 'https://capstone-production-8af8.up.railway.app';
+  const API_BASE = 'https://backend-careflow.vercel.app';
 
   const getAuthHeaders = React.useCallback(async () => {
     try {

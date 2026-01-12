@@ -36,7 +36,7 @@ export default function DoctorPatientRecords() {
   const [avatarUri, setAvatarUri] = useState<string | undefined>(undefined);
   const [refreshing, setRefreshing] = useState(false);
 
-  const API_BASE = 'https://capstone-production-8af8.up.railway.app';
+  const API_BASE = 'https://backend-careflow.vercel.app';
   const getAuthHeaders = React.useCallback(async () => {
     try {
       const raw = await AsyncStorage.getItem('session');

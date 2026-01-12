@@ -42,7 +42,7 @@ export default function DoctorDashboard() {
   const [avatarUri, setAvatarUri] = React.useState<string | undefined>(
     undefined,
   );
-  const API_BASE = 'https://capstone-production-8af8.up.railway.app';
+  const API_BASE = 'https://backend-careflow.vercel.app';
   const [showWelcome, setShowWelcome] = React.useState(false);
   const [welcomeMsg, setWelcomeMsg] = React.useState<string>('');
 

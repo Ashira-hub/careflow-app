@@ -24,7 +24,7 @@ const CARD_BG = '#F9FAFB';
 export default function DoctorEditProfile() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
-  const API_BASE = 'https://capstone-production-8af8.up.railway.app';
+  const API_BASE = 'https://backend-careflow.vercel.app';
 
   // Local editable state; hydrated from session
   const [name, setName] = useState('');

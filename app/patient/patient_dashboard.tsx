@@ -37,7 +37,7 @@ type MedicalRecord = {
 type PatientDashboardNavigationProp =
   NativeStackNavigationProp<RootStackParamList>;
 
-const API_BASE = 'https://capstone-production-8af8.up.railway.app';
+const API_BASE = 'https://backend-careflow.vercel.app';
 
 const PatientDashboard = () => {
   const insets = useSafeAreaInsets();

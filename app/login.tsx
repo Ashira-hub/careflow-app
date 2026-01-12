@@ -49,7 +49,7 @@ export default function LoginScreen({ navigation }: Props) {
     })();
   }, []);
 
-  const API_URL = 'https://capstone-production-8af8.up.railway.app/api/login'; // your backend IP
+  const API_URL = 'https://backend-careflow.vercel.app/api/login'; // your backend IP
 
   const handleLogin = async () => {
     if (!email || !password) {
