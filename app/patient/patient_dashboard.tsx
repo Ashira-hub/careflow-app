@@ -9,7 +9,6 @@ import {
   FlatList,
   SafeAreaView,
   RefreshControl,
-  TouchableWithoutFeedback,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -44,7 +43,7 @@ const PatientDashboard = () => {
   const navigation = useNavigation<PatientDashboardNavigationProp>();
   const [userName, setUserName] = useState('');
   const [userRole, setUserRole] = useState('Patient');
-  const [menuVisible, setMenuVisible] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [upcomingAppointments, setUpcomingAppointments] = useState<
     Appointment[]
   >([]);
@@ -417,6 +416,54 @@ const PatientDashboard = () => {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={[styles.container, { paddingBottom: 70 }]}>
+        <View style={[styles.topHeader, { paddingTop: insets.top }]}>
+          <Image
+            source={require('../../assets/appicon.png')}
+            style={styles.topHeaderLogo}
+            resizeMode="contain"
+          />
+          <View style={styles.topHeaderIcons}>
+            <TouchableOpacity
+              style={styles.iconBtn}
+              onPress={() => navigation.navigate('PatientNotification')}
+            >
+              <View style={{ position: 'relative' }}>
+                <Image
+                  source={require('../../assets/notification_icon.png')}
+                  style={styles.topHeaderIconImg}
+                  resizeMode="contain"
+                />
+              </View>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.topProfileBtn}
+              onPress={() => setShowProfileMenu(true)}
+              activeOpacity={0.8}
+            >
+              <View style={styles.topProfileAvatar}>
+                <Text style={styles.topProfileAvatarText}>
+                  {String(userName || 'P')
+                    .charAt(0)
+                    .toUpperCase()}
+                </Text>
+              </View>
+              <View style={styles.topProfileTextCol}>
+                <Text style={styles.topProfileName} numberOfLines={1}>
+                  {String(userName || 'Patient')}
+                </Text>
+                <Text style={styles.topProfileRole} numberOfLines={1}>
+                  {String(userRole || 'Patient')}
+                </Text>
+              </View>
+              <Image
+                source={require('../../assets/dropdown.png')}
+                style={styles.topProfileChevron}
+                resizeMode="contain"
+              />
+            </TouchableOpacity>
+          </View>
+        </View>
+        <View style={styles.topDivider} />
         <ScrollView
           style={styles.scrollView}
           contentContainerStyle={{ paddingBottom: (insets?.bottom || 0) + 120 }}
@@ -437,36 +484,6 @@ const PatientDashboard = () => {
               <Text style={styles.greeting}>Hello,</Text>
               <Text style={styles.userName}>{userName}</Text>
             </View>
-            <View style={styles.profileRight}>
-              <TouchableOpacity
-                onPress={() => navigation.navigate('PatientProfile')}
-              >
-                <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>
-                    {userName.charAt(0).toUpperCase()}
-                  </Text>
-                </View>
-              </TouchableOpacity>
-              <View style={styles.profileTextCol}>
-                <Text style={styles.profileName} numberOfLines={1}>
-                  {userName}
-                </Text>
-                <Text style={styles.profileRole} numberOfLines={1}>
-                  {userRole}
-                </Text>
-              </View>
-              <TouchableOpacity
-                style={styles.dropdownBtn}
-                onPress={() => setMenuVisible(v => !v)}
-                activeOpacity={0.7}
-              >
-                <Image
-                  source={require('../../assets/dropdown.png')}
-                  style={styles.dropdownIcon}
-                  resizeMode="contain"
-                />
-              </TouchableOpacity>
-            </View>
           </View>
 
           {/* Quick Actions */}
@@ -480,9 +497,11 @@ const PatientDashboard = () => {
                 <View
                   style={[styles.actionIcon, { backgroundColor: '#EFF6FF' }]}
                 >
-                  <Text style={[styles.actionIconText, { color: '#3B82F6' }]}>
-                    📅
-                  </Text>
+                  <Image
+                    source={require('../../assets/appointment_icon.png')}
+                    style={[styles.actionIconImg, { tintColor: '#3B82F6' }]}
+                    resizeMode="contain"
+                  />
                 </View>
                 <Text style={styles.actionText}>Appointment</Text>
               </TouchableOpacity>
@@ -494,9 +513,11 @@ const PatientDashboard = () => {
                 <View
                   style={[styles.actionIcon, { backgroundColor: '#F0FDF4' }]}
                 >
-                  <Text style={[styles.actionIconText, { color: '#10B981' }]}>
-                    📋
-                  </Text>
+                  <Image
+                    source={require('../../assets/records.png')}
+                    style={[styles.actionIconImg, { tintColor: '#10B981' }]}
+                    resizeMode="contain"
+                  />
                 </View>
                 <Text style={styles.actionText}>My Records</Text>
               </TouchableOpacity>
@@ -559,9 +580,20 @@ const PatientDashboard = () => {
                     onPress={() => navigation.navigate('MedicalRecords')}
                   >
                     <View style={styles.recordIcon}>
-                      <Text style={styles.recordIconText}>
-                        {getRecordIcon(record.type)}
-                      </Text>
+                      {record.type === 'consultation' ? (
+                        <Image
+                          source={require('../../assets/records.png')}
+                          style={[
+                            styles.recordIconImg,
+                            { tintColor: '#10B981' },
+                          ]}
+                          resizeMode="contain"
+                        />
+                      ) : (
+                        <Text style={styles.recordIconText}>
+                          {getRecordIcon(record.type)}
+                        </Text>
+                      )}
                     </View>
                     <View style={styles.recordDetails}>
                       <Text style={styles.recordTitle}>{record.title}</Text>
@@ -586,39 +618,55 @@ const PatientDashboard = () => {
           </View>
         </ScrollView>
       </View>
-      {menuVisible && (
-        <TouchableWithoutFeedback onPress={() => setMenuVisible(false)}>
-          <View style={styles.menuOverlay}>
-            <View style={styles.menuContainer}>
-              <TouchableOpacity
-                style={styles.menuItem}
-                onPress={() => {
-                  setMenuVisible(false);
-                  navigation.navigate('PatientProfile');
-                }}
-              >
-                <Text style={styles.menuItemText}>Profile</Text>
-              </TouchableOpacity>
-              <View style={styles.menuDivider} />
-              <TouchableOpacity
-                style={styles.menuItem}
-                onPress={async () => {
-                  try {
-                    await AsyncStorage.removeItem('session');
-                  } catch {}
-                  setMenuVisible(false);
-                  // @ts-ignore
-                  navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
-                }}
-              >
-                <Text style={styles.menuItemText}>Logout</Text>
-              </TouchableOpacity>
-            </View>
+
+      {showProfileMenu && (
+        <View style={styles.dropdownOverlay}>
+          <TouchableOpacity
+            style={{ flex: 1 }}
+            activeOpacity={1}
+            onPress={() => setShowProfileMenu(false)}
+          />
+          <View
+            style={[styles.dropdownCard, { top: insets.top + 60, right: 16 }]}
+          >
+            <TouchableOpacity
+              style={styles.dropdownItem}
+              onPress={() => {
+                setShowProfileMenu(false);
+                navigation.navigate('PatientProfile');
+              }}
+            >
+              <Text style={styles.dropdownText}>Profile</Text>
+            </TouchableOpacity>
+            <View style={styles.menuDivider} />
+            <TouchableOpacity
+              style={styles.dropdownItem}
+              onPress={async () => {
+                setShowProfileMenu(false);
+                try {
+                  await AsyncStorage.removeItem('session');
+                } catch {}
+                navigation.reset({
+                  index: 0,
+                  routes: [{ name: 'Login' }],
+                } as any);
+              }}
+            >
+              <Text style={[styles.dropdownText, { color: '#EF4444' }]}>
+                Logout
+              </Text>
+            </TouchableOpacity>
           </View>
-        </TouchableWithoutFeedback>
+        </View>
       )}
+
       {/* Bottom Navigation */}
-      <View style={[styles.bottomNav, { paddingBottom: insets.bottom }]}>
+      <View
+        style={[
+          styles.bottomNav,
+          { paddingBottom: Math.max(0, (insets.bottom || 0) - 8) },
+        ]}
+      >
         <BottomItem
           label="Home"
           active={true}
@@ -694,29 +742,62 @@ const styles = StyleSheet.create({
   // Top Navigation (matches doctor top bar)
   topHeader: {
     flexDirection: 'row',
-    marginTop: 10,
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 20,
+    paddingVertical: 8,
     backgroundColor: '#FFFFFF',
+    marginTop: 8,
   },
   topHeaderLogo: { width: 40, height: 40 },
   topHeaderIcons: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 8,
+  },
+  iconBtn: { padding: 8 },
+  topHeaderIconImg: { width: 20, height: 20, tintColor: '#10B981' },
+  topProfileBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+    borderRadius: 0,
+    backgroundColor: 'transparent',
+  },
+  topProfileAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#10B981',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topProfileAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  topProfileTextCol: {
     marginLeft: 12,
+    marginRight: 10,
+    maxWidth: 160,
   },
-  topAvatarBtn: { padding: 4 },
-  topAvatarCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#10B981',
+  topProfileName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
   },
-  topAvatarImg: { width: '100%', height: '100%' },
+  topProfileRole: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  topProfileChevron: {
+    width: 14,
+    height: 14,
+    tintColor: '#111827',
+  },
   topDivider: { height: 1, backgroundColor: '#E5E7EB' },
   header: {
     flexDirection: 'row',
@@ -815,7 +896,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'center',
-    paddingVertical: 8,
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',
@@ -826,26 +906,54 @@ const styles = StyleSheet.create({
     height: 80,
   },
   bottomItem: {
+    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
     flex: 1,
-    paddingVertical: 8,
+    paddingVertical: 0,
     height: '100%',
   },
   bottomImg: {
-    width: 24,
-    height: 24,
+    width: 28,
+    height: 28,
     marginBottom: 4,
   },
   bottomLabel: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#6B7280',
     textAlign: 'center',
+    width: '100%',
+    alignSelf: 'center',
+    marginTop: 2,
   },
   seeAll: {
     color: '#10B981',
     fontWeight: '500',
   },
+  // Top profile dropdown (same behavior as doctor)
+  dropdownOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+  },
+  dropdownCard: {
+    position: 'absolute',
+    width: 180,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    paddingVertical: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  dropdownItem: { paddingVertical: 10, paddingHorizontal: 12 },
+  dropdownText: { color: '#111827', fontWeight: '700' },
+  menuDivider: { height: 1, backgroundColor: '#E5E7EB' },
   quickActions: {
     marginTop: 20,
     flexDirection: 'row',
@@ -875,6 +983,10 @@ const styles = StyleSheet.create({
   },
   actionIconText: {
     fontSize: 24,
+  },
+  actionIconImg: {
+    width: 24,
+    height: 24,
   },
   actionText: {
     fontSize: 14,
@@ -979,6 +1091,10 @@ const styles = StyleSheet.create({
   recordIconText: {
     fontSize: 18,
   },
+  recordIconImg: {
+    width: 20,
+    height: 20,
+  },
   recordDetails: {
     flex: 1,
   },
@@ -1031,42 +1147,6 @@ const styles = StyleSheet.create({
   bookNowText: {
     color: '#FFFFFF',
     fontWeight: '500',
-  },
-  menuOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'transparent',
-    justifyContent: 'flex-start',
-    alignItems: 'flex-end',
-  },
-  menuContainer: {
-    marginTop: 80,
-    marginRight: 16,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    borderWidth: 0,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 3,
-    overflow: 'hidden',
-    minWidth: 150,
-  },
-  menuItem: {
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-  },
-  menuItemText: {
-    fontSize: 14,
-    color: '#111827',
-  },
-  menuDivider: {
-    height: 1,
-    backgroundColor: '#E5E7EB',
   },
 });
 

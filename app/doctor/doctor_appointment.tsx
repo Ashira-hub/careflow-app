@@ -10,11 +10,13 @@ import {
   Alert,
   Modal,
   TextInput,
+  RefreshControl,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { addAppointment } from '../../state/patient_records_store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import DoctorTopNav from './DoctorTopNav';
 import {
   scheduleAppointmentNotifications,
   cancelAppointmentNotifications,
@@ -428,7 +430,7 @@ export default function DoctorAppointment() {
   const [pickerTarget, setPickerTarget] = useState<'new' | 'detail'>('new');
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [avatarUri, setAvatarUri] = useState<string | undefined>(undefined);
+  const [refreshing, setRefreshing] = useState(false);
   const [showReminderBanner, setShowReminderBanner] = useState(false);
   const [reminderBannerMsg, setReminderBannerMsg] = useState<string>('');
   const [showReminderPicker, setShowReminderPicker] = useState(false);
@@ -844,6 +846,29 @@ export default function DoctorAppointment() {
     })();
   }, [getAuthHeaders]);
 
+  const loadAppointments = React.useCallback(async () => {
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`${API_BASE}/api/appointments`, { headers });
+      if (!res.ok) return;
+      const arr = await res.json();
+      if (Array.isArray(arr)) {
+        setAppointments(
+          arr
+            .filter((a: any) => !a.done)
+            .map((a: any) => ({
+              id: a.id,
+              patient: a.patient,
+              date: a.date,
+              time: a.time,
+              notes: a.notes,
+              done: a.done,
+            })),
+        );
+      }
+    } catch {}
+  }, [getAuthHeaders]);
+
   // Also check reminders whenever this screen regains focus
   useFocusEffect(
     React.useCallback(() => {
@@ -859,91 +884,41 @@ export default function DoctorAppointment() {
         } catch {
           setUnreadCount(0);
         }
-        // Load avatar from session
-        try {
-          const rawS = await AsyncStorage.getItem('session');
-          const sess = rawS ? JSON.parse(rawS) : null;
-          const uri = sess?.user?.avatar_uri || sess?.avatar_uri || undefined;
-          setAvatarUri(uri || undefined);
-        } catch {}
       })();
       return () => {};
     }, [checkDueReminders]),
   );
 
+  const onRefresh = React.useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await loadAppointments();
+      try {
+        const raw = await AsyncStorage.getItem('doctor_notifications');
+        const arr = raw ? JSON.parse(raw) : [];
+        const count = Array.isArray(arr)
+          ? arr.filter((n: any) => n && n.read === false).length
+          : 0;
+        setUnreadCount(count);
+      } catch {
+        setUnreadCount(0);
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadAppointments]);
+
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
         {/* Header */}
-        <View style={[styles.header, { paddingTop: insets.top }]}>
-          <Image
-            source={require('../../assets/appicon.png')}
-            style={styles.headerLogo}
-            resizeMode="contain"
-          />
-          <View style={styles.headerIcons}>
-            <TouchableOpacity
-              style={styles.iconBtn}
-              onPress={() => navigation.navigate('DoctorNotification' as never)}
-            >
-              <View style={{ position: 'relative' }}>
-                <Image
-                  source={require('../../assets/notification_icon.png')}
-                  style={styles.headerIconImg}
-                  resizeMode="contain"
-                />
-                {unreadCount > 0 && (
-                  <View
-                    style={{
-                      position: 'absolute',
-                      right: -6,
-                      top: -6,
-                      minWidth: 14,
-                      height: 14,
-                      paddingHorizontal: 3,
-                      borderRadius: 7,
-                      backgroundColor: '#EF4444',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: '#FFFFFF',
-                        fontSize: 9,
-                        fontWeight: '700',
-                      }}
-                    >
-                      {unreadCount > 99 ? '99+' : String(unreadCount)}
-                    </Text>
-                  </View>
-                )}
-              </View>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.avatarBtn}
-              onPress={() => setShowProfileMenu(true)}
-            >
-              <View style={styles.avatarCircle}>
-                {avatarUri ? (
-                  <Image
-                    source={{ uri: avatarUri }}
-                    style={styles.avatarImg}
-                    resizeMode="cover"
-                  />
-                ) : (
-                  <Image
-                    source={require('../../assets/appicon.png')}
-                    style={styles.avatarImg}
-                    resizeMode="cover"
-                  />
-                )}
-              </View>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        <View style={styles.divider} />
+        <DoctorTopNav
+          unreadCount={unreadCount}
+          onPressNotifications={() =>
+            navigation.navigate('DoctorNotification' as never)
+          }
+          onPressProfile={() => setShowProfileMenu(true)}
+        />
 
         {showReminderBanner && (
           <View style={[styles.reminderBanner, { top: insets.top + 48 }]}>
@@ -959,6 +934,9 @@ export default function DoctorAppointment() {
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
         >
           {/* Title Row */}
           <View style={styles.titleRow}>

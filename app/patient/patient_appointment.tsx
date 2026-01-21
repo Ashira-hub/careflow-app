@@ -10,7 +10,6 @@ import {
   Modal,
   SafeAreaView,
   Platform,
-  StatusBar,
   Image,
   Alert,
   ToastAndroid,
@@ -40,6 +39,11 @@ type Appointment = {
   time: string;
   status: 'upcoming' | 'completed' | 'cancelled';
   notes?: string;
+};
+
+type DoctorOption = {
+  id: string | number;
+  full_name: string;
 };
 
 type TabType = 'upcoming' | 'history';
@@ -82,14 +86,21 @@ const PatientAppointment = () => {
   const navigation =
     useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute();
+  const [userName, setUserName] = useState('');
+  const [userRole, setUserRole] = useState('Patient');
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('upcoming');
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedTime, setSelectedTime] = useState(new Date());
   const [doctor, setDoctor] = useState('');
+  const [doctorUserId, setDoctorUserId] = useState<string | number | undefined>(
+    undefined,
+  );
+  const [doctors, setDoctors] = useState<DoctorOption[]>([]);
+  const [doctorsLoading, setDoctorsLoading] = useState(false);
+  const [showDoctorPicker, setShowDoctorPicker] = useState(false);
   const [reason, setReason] = useState('');
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showTimePicker, setShowTimePicker] = useState(false);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [showRemModal, setShowRemModal] = useState(false);
@@ -98,10 +109,15 @@ const PatientAppointment = () => {
     date?: string;
     time?: string;
   } | null>(null);
-  const [customMinutesInput, setCustomMinutesInput] = useState('');
+  const [customReminderTime, setCustomReminderTime] = useState<Date>(
+    new Date(),
+  );
+  const [showCustomReminderPicker, setShowCustomReminderPicker] =
+    useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [detailsTarget, setDetailsTarget] = useState<Appointment | null>(null);
   const [showResModal, setShowResModal] = useState(false);
+  const [resTarget, setResTarget] = useState<Appointment | null>(null);
   const [resDateInput, setResDateInput] = useState('');
   const [resTimeInput, setResTimeInput] = useState('');
   const [showResDatePicker, setShowResDatePicker] = useState(false);
@@ -159,6 +175,60 @@ const PatientAppointment = () => {
     }
   }, []);
 
+  const loadUserData = React.useCallback(async () => {
+    try {
+      const session = await AsyncStorage.getItem('session');
+      if (session) {
+        const { user } = JSON.parse(session);
+        const derivedName =
+          user?.full_name ||
+          user?.fullName ||
+          user?.name ||
+          [user?.firstName, user?.lastName].filter(Boolean).join(' ');
+        setUserName(String(derivedName || 'Patient'));
+        const rawRole = user?.role || user?.role_name || user?.roleName;
+        const roleStr = String(rawRole || '').trim();
+        const displayRole = roleStr
+          ? roleStr.charAt(0).toUpperCase() + roleStr.slice(1)
+          : 'Patient';
+        setUserRole(displayRole);
+      }
+    } catch {}
+  }, []);
+
+  const nameMatches = React.useCallback((pRaw: string, meRaw: string) => {
+    const p = String(pRaw || '')
+      .toLowerCase()
+      .trim();
+    const me = String(meRaw || '')
+      .toLowerCase()
+      .trim();
+    if (!p || !me) return false;
+    if (p === me) return true;
+    const meTokens = me.split(/\s+/).filter(Boolean);
+    if (meTokens.length > 0 && meTokens.every(t => p.includes(t))) return true;
+    const pTokens = p.split(/\s+/).filter(Boolean);
+    if (pTokens.length > 0 && pTokens.every(t => me.includes(t))) return true;
+    return false;
+  }, []);
+
+  const formatYmd = React.useCallback((d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }, []);
+
+  const formatTime12h = React.useCallback((d: Date) => {
+    const hours24 = d.getHours();
+    const minutes = d.getMinutes();
+    const ap = hours24 >= 12 ? 'PM' : 'AM';
+    const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
+    const hh = String(hours12).padStart(2, '0');
+    const mm = String(minutes).padStart(2, '0');
+    return `${hh}:${mm} ${ap}`;
+  }, []);
+
   const loadAppointments = React.useCallback(async () => {
     setRefreshing(true);
     try {
@@ -169,19 +239,6 @@ const PatientAppointment = () => {
       const myName = await getCurrentUserName();
       const myId = await getCurrentUserId();
       const list = Array.isArray(arr) ? arr : [];
-      const nameMatches = (pRaw: string, meRaw: string) => {
-        const p = pRaw.toLowerCase().trim();
-        const me = meRaw.toLowerCase().trim();
-        if (!p || !me) return false;
-        if (p === me) return true;
-        const meTokens = me.split(/\s+/).filter(Boolean);
-        if (meTokens.length > 0 && meTokens.every(t => p.includes(t)))
-          return true;
-        const pTokens = p.split(/\s+/).filter(Boolean);
-        if (pTokens.length > 0 && pTokens.every(t => me.includes(t)))
-          return true;
-        return false;
-      };
       const mine = list.filter((a: any) => {
         const pid = a?.patientId ?? a?.patient_id;
         if (pid != null && myId != null) {
@@ -205,13 +262,103 @@ const PatientAppointment = () => {
     } finally {
       setRefreshing(false);
     }
-  }, [getAuthHeaders, getCurrentUserName, getCurrentUserId]);
+  }, [getAuthHeaders, getCurrentUserName, getCurrentUserId, nameMatches]);
+
+  React.useEffect(() => {
+    if (!isModalVisible) return;
+    (async () => {
+      setDoctorsLoading(true);
+      try {
+        const headers = await getAuthHeaders();
+
+        const tryFetch = async (url: string) => {
+          const res = await fetch(url, { headers });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        };
+
+        let data: any;
+        try {
+          data = await tryFetch(`${API_BASE}/api/doctors`);
+        } catch {
+          try {
+            data = await tryFetch(`${API_BASE}/api/users?role=doctor`);
+          } catch {
+            try {
+              data = await tryFetch(`${API_BASE}/api/users?role=Doctor`);
+            } catch {
+              data = await tryFetch(`${API_BASE}/api/users`);
+            }
+          }
+        }
+
+        const list = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.doctors)
+          ? data.doctors
+          : Array.isArray(data?.users)
+          ? data.users
+          : [];
+
+        const toFullName = (u: any) => {
+          const full =
+            u?.full_name ||
+            u?.fullName ||
+            u?.name ||
+            u?.username ||
+            [u?.firstName, u?.lastName].filter(Boolean).join(' ');
+          return String(full || '').trim();
+        };
+        const toId = (u: any) => u?.id ?? u?.user_id ?? u?.userId ?? u?.uid;
+
+        const roleFiltered = list.filter((u: any) => {
+          const r = String(u?.role || u?.role_name || u?.roleName || '')
+            .toLowerCase()
+            .trim();
+          return r ? r === 'doctor' : true;
+        });
+
+        const source = roleFiltered.length > 0 ? roleFiltered : list;
+        const options = source
+          .map((u: any) => {
+            const full_name = toFullName(u);
+            const id = toId(u);
+            const stableId =
+              id != null && String(id).trim().length > 0 ? id : full_name;
+            return {
+              id: stableId,
+              full_name,
+            } as DoctorOption;
+          })
+          .filter((x: DoctorOption) =>
+            Boolean(String(x.full_name || '').trim()),
+          );
+
+        const byId = new Map<string, DoctorOption>();
+        for (const opt of options) {
+          const key = String(opt.id);
+          if (!byId.has(key)) byId.set(key, opt);
+        }
+
+        const finalOptions = Array.from(byId.values()).sort((a, b) =>
+          String(a.full_name).localeCompare(String(b.full_name)),
+        );
+
+        setDoctors(finalOptions);
+      } catch {
+        setDoctors([]);
+      } finally {
+        setDoctorsLoading(false);
+      }
+    })();
+  }, [getAuthHeaders, isModalVisible]);
 
   useFocusEffect(
     React.useCallback(() => {
       loadAppointments();
+      loadUserData();
       return () => {};
-    }, [loadAppointments]),
+    }, [loadAppointments, loadUserData]),
   );
 
   React.useEffect(() => {
@@ -230,31 +377,75 @@ const PatientAppointment = () => {
     setIsModalVisible(true);
   };
 
-  const handleBookAppointment = () => {
-    // Handle the appointment booking logic here
-    console.log('Booking appointment with:', {
-      doctor,
-      date: selectedDate.toDateString(),
-      time: selectedTime.toTimeString(),
-      reason,
-    });
-    // Reset form and close modal
-    setDoctor('');
-    setReason('');
-    setIsModalVisible(false);
-  };
+  const handleBookAppointment = async () => {
+    try {
+      const doc = String(doctor || '').trim();
+      const docId = doctorUserId;
+      const notes = String(reason || '').trim();
+      if (!doc) {
+        Alert.alert('Validation', "Please enter the doctor's name.");
+        return;
+      }
+      if (!notes) {
+        Alert.alert('Validation', 'Please enter the reason for visit.');
+        return;
+      }
+      const date = formatYmd(selectedDate);
+      const time = formatTime12h(selectedTime);
+      const patientName = (await getCurrentUserName()) || 'Patient';
+      const headers = await getAuthHeaders();
+      const res = await fetch(`${API_BASE}/api/appointments`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          patient: patientName,
+          date,
+          time,
+          notes,
+          done: false,
+          createdByName: doc,
+          created_by_name: doc,
+          doctorName: doc,
+          doctor_user_id: docId,
+          doctorUserId: docId,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-  const onDateChange = (event: any, selectedDate?: Date) => {
-    setShowDatePicker(false);
-    if (selectedDate) {
-      setSelectedDate(selectedDate);
-    }
-  };
+      // Best-effort: notify the selected doctor via backend notifications endpoint (if supported)
+      try {
+        const msgBase = `New appointment request from ${patientName} (${date} ${time}).`;
+        const message = notes ? `${msgBase} ${notes}` : msgBase;
+        await fetch(`${API_BASE}/api/notifications`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            title: 'Appointment Request',
+            message,
+            toName: doc,
+            recipientName: doc,
+            doctorName: doc,
+            user_id: docId,
+            recipientId: docId,
+          }),
+        });
+      } catch {}
 
-  const onTimeChange = (event: any, selectedTime?: Date) => {
-    setShowTimePicker(false);
-    if (selectedTime) {
-      setSelectedTime(selectedTime);
+      setDoctor('');
+      setDoctorUserId(undefined);
+      setReason('');
+      setIsModalVisible(false);
+      loadAppointments();
+      if (Platform.OS === 'android') {
+        ToastAndroid.show('Appointment booked', ToastAndroid.SHORT);
+      } else {
+        Alert.alert('Booked', 'Appointment booked');
+      }
+    } catch (e: any) {
+      Alert.alert(
+        'Error',
+        `Failed to book appointment: ${e?.message || 'Network error'}`,
+      );
     }
   };
 
@@ -266,6 +457,27 @@ const PatientAppointment = () => {
 
   const openReminder = (item: Appointment) => {
     setRemTarget({ id: item.id, date: item.date, time: item.time });
+    try {
+      const [y, m, d] = String(item.date || '')
+        .split('-')
+        .map(Number);
+      const [hhmm, ap] = String(item.time || '').split(' ');
+      const [hhStr, mmStr] = String(hhmm || '').split(':');
+      const hh = Number(hhStr);
+      const mm = Number(mmStr);
+      if (
+        Number.isFinite(y) &&
+        Number.isFinite(m) &&
+        Number.isFinite(d) &&
+        Number.isFinite(hh) &&
+        Number.isFinite(mm)
+      ) {
+        const h24 = (hh % 12) + (String(ap).toUpperCase() === 'PM' ? 12 : 0);
+        const appt = new Date(y, m - 1, d, h24, mm, 0, 0);
+        const suggested = new Date(appt.getTime() - 30 * 60 * 1000);
+        setCustomReminderTime(suggested);
+      }
+    } catch {}
     setShowRemModal(true);
   };
 
@@ -286,11 +498,67 @@ const PatientAppointment = () => {
       );
     } catch {}
     setShowRemModal(false);
-    setCustomMinutesInput('');
+    setShowCustomReminderPicker(false);
   };
 
+  const setCustomReminderFromSelectedTime = React.useCallback(async () => {
+    try {
+      if (!remTarget?.date || !remTarget?.time) return;
+      const [y, m, d] = String(remTarget.date || '')
+        .split('-')
+        .map(Number);
+      const [hhmm, ap] = String(remTarget.time || '').split(' ');
+      const [hhStr, mmStr] = String(hhmm || '').split(':');
+      const hh = Number(hhStr);
+      const mm = Number(mmStr);
+      if (
+        !Number.isFinite(y) ||
+        !Number.isFinite(m) ||
+        !Number.isFinite(d) ||
+        !Number.isFinite(hh) ||
+        !Number.isFinite(mm)
+      ) {
+        return;
+      }
+      const h24 = (hh % 12) + (String(ap).toUpperCase() === 'PM' ? 12 : 0);
+      const appt = new Date(y, m - 1, d, h24, mm, 0, 0);
+      const chosen = new Date(
+        y,
+        m - 1,
+        d,
+        customReminderTime.getHours(),
+        customReminderTime.getMinutes(),
+        0,
+        0,
+      );
+      const nowTs = Date.now();
+      if (chosen.getTime() <= nowTs) {
+        Alert.alert('Invalid time', 'Please select a future reminder time.');
+        return;
+      }
+      if (chosen.getTime() >= appt.getTime()) {
+        Alert.alert(
+          'Invalid time',
+          'Reminder time must be before the appointment time.',
+        );
+        return;
+      }
+      const diffMinutes = Math.ceil(
+        (appt.getTime() - chosen.getTime()) / 60000,
+      );
+      if (!Number.isFinite(diffMinutes) || diffMinutes <= 0) {
+        Alert.alert('Invalid time', 'Please select a valid reminder time.');
+        return;
+      }
+      await onSetReminder({
+        near: false,
+        now: false,
+        customMinutes: diffMinutes,
+      });
+    } catch {}
+  }, [customReminderTime, onSetReminder, remTarget]);
+
   const openDetails = (item: Appointment) => {
-    if (item.status !== 'upcoming') return;
     setDetailsTarget(item);
     setShowDetailsModal(true);
   };
@@ -419,7 +687,7 @@ const PatientAppointment = () => {
   const renderAppointmentItem = ({ item }: { item: Appointment }) => (
     <TouchableOpacity
       activeOpacity={0.8}
-      onPress={item.status === 'upcoming' ? () => openDetails(item) : undefined}
+      onPress={() => openDetails(item)}
       style={styles.appointmentCard}
     >
       <View style={styles.appointmentHeader}>
@@ -433,7 +701,7 @@ const PatientAppointment = () => {
             >
               <Image
                 source={require('../../assets/notification_icon.png')}
-                style={{ width: 18, height: 18, tintColor: '#2563eb' }}
+                style={{ width: 18, height: 18, tintColor: '#111827' }}
                 resizeMode="contain"
               />
             </TouchableOpacity>
@@ -485,9 +753,64 @@ const PatientAppointment = () => {
 
   return (
     <SafeAreaView style={styles.safeArea}>
+      <View style={[styles.topHeader, { paddingTop: insets.top }]}>
+        <Image
+          source={require('../../assets/appicon.png')}
+          style={styles.topHeaderLogo}
+          resizeMode="contain"
+        />
+        <View style={styles.topHeaderIcons}>
+          <TouchableOpacity
+            style={styles.iconBtn}
+            onPress={() => navigation.navigate('PatientNotification')}
+          >
+            <View style={{ position: 'relative' }}>
+              <Image
+                source={require('../../assets/notification_icon.png')}
+                style={styles.topHeaderIconImg}
+                resizeMode="contain"
+              />
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.topProfileBtn}
+            onPress={() => setShowProfileMenu(true)}
+            activeOpacity={0.8}
+          >
+            <View style={styles.topProfileAvatar}>
+              <Text style={styles.topProfileAvatarText}>
+                {String(userName || 'P')
+                  .charAt(0)
+                  .toUpperCase()}
+              </Text>
+            </View>
+            <View style={styles.topProfileTextCol}>
+              <Text style={styles.topProfileName} numberOfLines={1}>
+                {String(userName || 'Patient')}
+              </Text>
+              <Text style={styles.topProfileRole} numberOfLines={1}>
+                {String(userRole || 'Patient')}
+              </Text>
+            </View>
+            <Image
+              source={require('../../assets/dropdown.png')}
+              style={styles.topProfileChevron}
+              resizeMode="contain"
+            />
+          </TouchableOpacity>
+        </View>
+      </View>
+      <View style={styles.topDivider} />
       <View style={styles.container}>
         <View style={styles.headerContainer}>
-          <Text style={styles.header}>My Appointments</Text>
+          <Text style={styles.header}>Appointments</Text>
+          <TouchableOpacity
+            style={styles.addButton}
+            activeOpacity={0.8}
+            onPress={handleAddAppointment}
+          >
+            <Text style={styles.addButtonText}>+</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Tabs */}
@@ -553,7 +876,7 @@ const PatientAppointment = () => {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Book New Appointment</Text>
+              <Text style={styles.modalTitle}>Request Appointment</Text>
               <TouchableOpacity onPress={() => setIsModalVisible(false)}>
                 <Text style={styles.closeButton}>×</Text>
               </TouchableOpacity>
@@ -561,51 +884,24 @@ const PatientAppointment = () => {
 
             <ScrollView style={styles.modalBody}>
               <Text style={styles.label}>Doctor's Name</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter doctor's name"
-                value={doctor}
-                onChangeText={setDoctor}
-              />
-
-              <Text style={styles.label}>Date</Text>
               <TouchableOpacity
                 style={styles.dateTimeInput}
-                onPress={() => setShowDatePicker(true)}
+                activeOpacity={0.8}
+                onPress={() => setShowDoctorPicker(true)}
               >
-                <Text>{selectedDate.toDateString()}</Text>
+                <View style={styles.doctorSelectRow}>
+                  <Text style={styles.doctorSelectText}>
+                    {doctor || 'Select doctor'}
+                  </Text>
+                  <Image
+                    source={require('../../assets/dropdown.png')}
+                    style={styles.doctorSelectIcon}
+                    resizeMode="contain"
+                  />
+                </View>
               </TouchableOpacity>
-              {showDatePicker && (
-                <DateTimePicker
-                  value={selectedDate}
-                  mode="date"
-                  display="default"
-                  onChange={onDateChange}
-                />
-              )}
 
-              <Text style={styles.label}>Time</Text>
-              <TouchableOpacity
-                style={styles.dateTimeInput}
-                onPress={() => setShowTimePicker(true)}
-              >
-                <Text>
-                  {selectedTime.toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
-                </Text>
-              </TouchableOpacity>
-              {showTimePicker && (
-                <DateTimePicker
-                  value={selectedTime}
-                  mode="time"
-                  display="default"
-                  onChange={onTimeChange}
-                />
-              )}
-
-              <Text style={styles.label}>Reason for Visit</Text>
+              <Text style={styles.label}>Description</Text>
               <TextInput
                 style={[styles.input, styles.textArea]}
                 placeholder="Enter reason for visit"
@@ -627,8 +923,53 @@ const PatientAppointment = () => {
                 style={styles.bookButton}
                 onPress={handleBookAppointment}
               >
-                <Text style={styles.bookButtonText}>Book Appointment</Text>
+                <Text style={styles.bookButtonText}>Request Appointment</Text>
               </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showDoctorPicker}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowDoctorPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '70%' }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Doctor</Text>
+              <TouchableOpacity onPress={() => setShowDoctorPicker(false)}>
+                <Text style={styles.closeButton}>×</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.modalBody}>
+              {doctorsLoading ? (
+                <Text style={styles.scheduleHint}>Loading doctors...</Text>
+              ) : doctors.length > 0 ? (
+                <FlatList
+                  data={doctors}
+                  keyExtractor={item => String(item.id)}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={styles.doctorPickerItem}
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        setDoctor(String(item.full_name || ''));
+                        setDoctorUserId(item.id);
+                        setShowDoctorPicker(false);
+                      }}
+                    >
+                      <Text style={styles.doctorPickerItemText}>
+                        {String(item.full_name || '')}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                />
+              ) : (
+                <Text style={styles.scheduleHint}>No doctors found.</Text>
+              )}
             </View>
           </View>
         </View>
@@ -736,14 +1077,23 @@ const PatientAppointment = () => {
                 style={styles.dateTimeInput}
                 onPress={() => setShowResDatePicker(true)}
               >
-                <Text>{resDateInput || 'Select date'}</Text>
+                <View style={styles.rescheduleInputRow}>
+                  <Text style={styles.rescheduleInputText}>
+                    {resDateInput || 'Select date'}
+                  </Text>
+                  <Image
+                    source={require('../../assets/appointment_icon.png')}
+                    style={styles.rescheduleInputIcon}
+                    resizeMode="contain"
+                  />
+                </View>
               </TouchableOpacity>
               {showResDatePicker && (
                 <DateTimePicker
                   value={(() => {
                     const [y, m, d] = (resDateInput || '')
                       .split('-')
-                      .map(x => parseInt(x, 10));
+                      .map((x: string) => parseInt(x, 10));
                     if (
                       !Number.isNaN(y) &&
                       !Number.isNaN(m) &&
@@ -775,7 +1125,16 @@ const PatientAppointment = () => {
                 style={styles.dateTimeInput}
                 onPress={() => setShowResTimePicker(true)}
               >
-                <Text>{resTimeInput || 'Select time'}</Text>
+                <View style={styles.rescheduleInputRow}>
+                  <Text style={styles.rescheduleInputText}>
+                    {resTimeInput || 'Select time'}
+                  </Text>
+                  <Image
+                    source={require('../../assets/time_icon.png')}
+                    style={styles.rescheduleInputIcon}
+                    resizeMode="contain"
+                  />
+                </View>
               </TouchableOpacity>
               {showResTimePicker && (
                 <DateTimePicker
@@ -783,7 +1142,7 @@ const PatientAppointment = () => {
                     const now = new Date();
                     const [hh, mm] = (resTimeInput || '')
                       .split(':')
-                      .map(x => parseInt(x, 10));
+                      .map((x: string) => parseInt(x, 10));
                     if (!Number.isNaN(hh) && !Number.isNaN(mm)) {
                       now.setHours(hh, mm, 0, 0);
                     }
@@ -835,34 +1194,41 @@ const PatientAppointment = () => {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Set Reminder</Text>
+              <Text style={styles.modalTitle}>Custom Reminder</Text>
               <TouchableOpacity onPress={() => setShowRemModal(false)}>
                 <Text style={styles.closeButton}>×</Text>
               </TouchableOpacity>
             </View>
             <View style={styles.modalBody}>
+              <Text style={styles.label}>Select reminder time</Text>
               <TouchableOpacity
-                style={[styles.bookButton, { backgroundColor: '#2563eb' }]}
-                onPress={() => onSetReminder({ near: true, now: false })}
+                style={styles.dateTimeInput}
+                onPress={() => setShowCustomReminderPicker(true)}
               >
-                <Text style={styles.bookButtonText}>30 minutes before</Text>
+                <View style={styles.customReminderTimeRow}>
+                  <Text style={styles.customReminderTimeText}>
+                    {formatTime12h(customReminderTime)}
+                  </Text>
+                  <Image
+                    source={require('../../assets/time_icon.png')}
+                    style={styles.customReminderTimeIcon}
+                    resizeMode="contain"
+                  />
+                </View>
               </TouchableOpacity>
-              <View style={{ height: 8 }} />
-              <TouchableOpacity
-                style={[styles.bookButton, { backgroundColor: '#10B981' }]}
-                onPress={() => onSetReminder({ near: false, now: true })}
-              >
-                <Text style={styles.bookButtonText}>At time</Text>
-              </TouchableOpacity>
-              <View style={{ height: 12 }} />
-              <Text style={styles.label}>Custom minutes before</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. 60"
-                keyboardType="number-pad"
-                value={customMinutesInput}
-                onChangeText={setCustomMinutesInput}
-              />
+              {showCustomReminderPicker && (
+                <DateTimePicker
+                  value={customReminderTime}
+                  mode="time"
+                  display="default"
+                  onChange={(event, selectedTime) => {
+                    setShowCustomReminderPicker(false);
+                    if (selectedTime) {
+                      setCustomReminderTime(selectedTime);
+                    }
+                  }}
+                />
+              )}
             </View>
             <View style={styles.modalFooter}>
               <TouchableOpacity
@@ -873,25 +1239,66 @@ const PatientAppointment = () => {
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.bookButton}
-                onPress={() => {
-                  const n = Number(customMinutesInput);
-                  if (Number.isFinite(n) && n > 0)
-                    onSetReminder({
-                      near: false,
-                      now: false,
-                      customMinutes: Math.floor(n),
-                    });
-                }}
+                onPress={setCustomReminderFromSelectedTime}
               >
-                <Text style={styles.bookButtonText}>Set Custom</Text>
+                <Text style={styles.bookButtonText}>Set Reminder</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
+      {showProfileMenu && (
+        <View style={styles.dropdownOverlay}>
+          <TouchableOpacity
+            style={{ flex: 1 }}
+            activeOpacity={1}
+            onPress={() => setShowProfileMenu(false)}
+          />
+          <View
+            style={[
+              styles.dropdownCard,
+              { top: (insets.top || 0) + 60, right: 16 },
+            ]}
+          >
+            <TouchableOpacity
+              style={styles.dropdownItem}
+              onPress={() => {
+                setShowProfileMenu(false);
+                navigation.navigate('PatientProfile');
+              }}
+            >
+              <Text style={styles.dropdownText}>Profile</Text>
+            </TouchableOpacity>
+            <View style={styles.menuDivider} />
+            <TouchableOpacity
+              style={styles.dropdownItem}
+              onPress={async () => {
+                setShowProfileMenu(false);
+                try {
+                  await AsyncStorage.removeItem('session');
+                } catch {}
+                navigation.reset({
+                  index: 0,
+                  routes: [{ name: 'Login' }],
+                } as any);
+              }}
+            >
+              <Text style={[styles.dropdownText, { color: '#EF4444' }]}>
+                Logout
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
       {/* Bottom Navigation */}
-      <View style={[styles.bottomNav, { paddingBottom: insets.bottom }]}>
+      <View
+        style={[
+          styles.bottomNav,
+          { paddingBottom: Math.max(0, (insets.bottom || 0) - 8) },
+        ]}
+      >
         <BottomItem
           label="Home"
           active={false}
@@ -925,8 +1332,66 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#FFFFFF',
-    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
   },
+  topHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+    marginTop: 8,
+  },
+  topHeaderLogo: { width: 40, height: 40 },
+  topHeaderIcons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  iconBtn: { padding: 8 },
+  topHeaderIconImg: { width: 20, height: 20, tintColor: '#10B981' },
+  topProfileBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+    borderRadius: 0,
+    backgroundColor: 'transparent',
+  },
+  topProfileAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#10B981',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topProfileAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  topProfileTextCol: {
+    marginLeft: 12,
+    marginRight: 10,
+    maxWidth: 160,
+  },
+  topProfileName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  topProfileRole: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  topProfileChevron: {
+    width: 14,
+    height: 14,
+    tintColor: '#111827',
+  },
+  topDivider: { height: 1, backgroundColor: '#E5E7EB' },
   container: {
     flex: 1,
     padding: 16,
@@ -943,11 +1408,21 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#2d3748',
   },
+  headerBookButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#10B981',
+  },
+  headerBookButtonText: {
+    color: '#ffffff',
+    fontWeight: '600',
+  },
   addButton: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#2563eb',
+    backgroundColor: '#10B981',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -989,7 +1464,7 @@ const styles = StyleSheet.create({
   },
 
   activeTabText: {
-    color: '#2563eb',
+    color: '#10B981',
     fontWeight: '600',
   },
   listContent: {
@@ -1026,7 +1501,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   statusUpcoming: {
-    backgroundColor: '#dbeafe',
+    backgroundColor: '#F3F4F6',
   },
   statusCompleted: {
     backgroundColor: '#dcfce7',
@@ -1036,7 +1511,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   statusUpcomingText: {
-    color: '#1d4ed8',
+    color: '#111827',
   },
   statusCompletedText: {
     color: '#15803d',
@@ -1085,10 +1560,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 8,
-    backgroundColor: '#dbeafe',
+    backgroundColor: '#ECFDF5',
   },
   rescheduleButtonText: {
-    color: '#2563eb',
+    color: '#10B981',
     fontSize: 14,
     fontWeight: '500',
   },
@@ -1166,12 +1641,135 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     backgroundColor: '#f8fafc',
   },
+  customReminderTimeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  customReminderTimeIcon: {
+    width: 18,
+    height: 18,
+    tintColor: '#111827',
+  },
+  customReminderTimeText: {
+    color: '#111827',
+  },
+  rescheduleInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  rescheduleInputText: {
+    color: '#111827',
+  },
+  rescheduleInputIcon: {
+    width: 18,
+    height: 18,
+    tintColor: '#111827',
+  },
+  doctorSelectRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  doctorSelectText: {
+    color: '#111827',
+    flex: 1,
+    paddingRight: 12,
+  },
+  doctorSelectIcon: {
+    width: 16,
+    height: 16,
+    tintColor: '#111827',
+  },
+  doctorPickerItem: {
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  doctorPickerItemText: {
+    fontSize: 14,
+    color: '#111827',
+  },
   textArea: {
     minHeight: 100,
     textAlignVertical: 'top',
   },
+  scheduleCard: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 10,
+    padding: 12,
+  },
+  scheduleSubTitle: {
+    fontSize: 12,
+    color: '#64748b',
+    marginBottom: 6,
+  },
+  scheduleHint: {
+    fontSize: 12,
+    color: '#475569',
+    marginBottom: 10,
+  },
+  slotWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  slotChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#ffffff',
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  slotChipBooked: {
+    borderColor: '#fecaca',
+    backgroundColor: '#fee2e2',
+  },
+  slotChipActive: {
+    borderColor: '#10B981',
+    backgroundColor: '#ECFDF5',
+  },
+  slotChipText: {
+    fontSize: 12,
+    color: '#0f172a',
+    fontWeight: '600',
+  },
+  slotChipTextBooked: {
+    color: '#dc2626',
+  },
+  slotChipTextActive: {
+    color: '#10B981',
+  },
+  dropdownOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+  },
+  dropdownCard: {
+    position: 'absolute',
+    width: 180,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    paddingVertical: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  dropdownItem: { paddingVertical: 10, paddingHorizontal: 12 },
+  dropdownText: { color: '#111827', fontWeight: '700' },
+  menuDivider: { height: 1, backgroundColor: '#E5E7EB' },
   bookButton: {
-    backgroundColor: '#2563eb',
+    backgroundColor: '#10B981',
     borderRadius: 8,
     paddingVertical: 12,
     paddingHorizontal: 24,
@@ -1211,7 +1809,7 @@ const styles = StyleSheet.create({
   },
   // Button variants for modal footer
   primaryButton: {
-    backgroundColor: '#2563eb',
+    backgroundColor: '#10B981',
     borderRadius: 8,
     paddingVertical: 12,
     paddingHorizontal: 16,
@@ -1256,7 +1854,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'center',
-    paddingVertical: 8,
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',
@@ -1265,24 +1862,27 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 80, // Increased height to accommodate labels
-    paddingBottom: 10, // Added bottom padding for better spacing
   },
   bottomItem: {
+    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
     flex: 1,
-    paddingVertical: 8, // Increased vertical padding
+    paddingVertical: 0, // Increased vertical padding
     height: '100%', // Ensure it takes full height of parent
   },
   bottomImg: {
-    width: 24,
-    height: 24,
+    width: 28,
+    height: 28,
     marginBottom: 4, // Reset to positive margin for proper spacing
   },
   bottomLabel: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#6B7280',
     textAlign: 'center',
+    width: '100%',
+    alignSelf: 'center',
+    marginTop: 2,
   },
 });
 

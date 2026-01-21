@@ -3,15 +3,16 @@ import {
   View,
   Text,
   StyleSheet,
-  Image,
   TouchableOpacity,
   SafeAreaView,
   FlatList,
   Modal,
+  Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import DoctorTopNav from './DoctorTopNav';
 
 const GREEN = '#10B981';
 const BORDER = '#E5E7EB';
@@ -34,7 +35,7 @@ export default function DoctorNotification() {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
   const [detailItem, setDetailItem] = useState<NotificationItem | null>(null);
-  const [avatarUri, setAvatarUri] = useState<string | undefined>(undefined);
+  const [refreshing, setRefreshing] = useState(false);
   const API_BASE = 'https://backend-careflow.vercel.app';
 
   const getAuthHeaders = React.useCallback(async () => {
@@ -56,6 +57,106 @@ export default function DoctorNotification() {
       return { 'Content-Type': 'application/json' };
     }
   }, []);
+
+  const getCurrentUserName = React.useCallback(async (): Promise<
+    string | undefined
+  > => {
+    try {
+      const raw = await AsyncStorage.getItem('session');
+      if (!raw) return undefined;
+      const sess = JSON.parse(raw);
+      return (
+        sess?.user?.full_name ||
+        sess?.user?.fullName ||
+        sess?.user?.name ||
+        sess?.full_name ||
+        sess?.name
+      );
+    } catch {
+      return undefined;
+    }
+  }, []);
+
+  const nameMatches = React.useCallback((pRaw: string, meRaw: string) => {
+    const p = String(pRaw || '')
+      .toLowerCase()
+      .trim();
+    const me = String(meRaw || '')
+      .toLowerCase()
+      .trim();
+    if (!p || !me) return false;
+    if (p === me) return true;
+    const meTokens = me.split(/\s+/).filter(Boolean);
+    if (meTokens.length > 0 && meTokens.every(t => p.includes(t))) return true;
+    const pTokens = p.split(/\s+/).filter(Boolean);
+    if (pTokens.length > 0 && pTokens.every(t => me.includes(t))) return true;
+    return false;
+  }, []);
+
+  const ingestAppointmentRequests = React.useCallback(
+    async (existing: any[]) => {
+      try {
+        const headers = await getAuthHeaders();
+        const myName = (await getCurrentUserName()) || '';
+        if (!myName) return existing;
+
+        const res = await fetch(`${API_BASE}/api/appointments`, { headers });
+        if (!res.ok) return existing;
+        const arr = await res.json();
+        const list = Array.isArray(arr) ? arr : [];
+        const mine = list.filter((a: any) => {
+          const createdBy = String(
+            a?.createdByName || a?.created_by_name || '',
+          );
+          const done = Boolean(a?.done);
+          return !done && nameMatches(createdBy, myName);
+        });
+
+        const mapped = mine.map((a: any) => {
+          const base = String(
+            a?.id ?? `${a?.patient || ''}-${a?.date || ''}-${a?.time || ''}`,
+          );
+          const ts = Date.parse(String(a?.created_at || a?.createdAt || ''));
+          const patient = String(a?.patient || 'A patient');
+          const date = String(a?.date || '');
+          const time = String(a?.time || '');
+          const notes = String(a?.notes || '').trim();
+          const when = [date, time].filter(Boolean).join(' ');
+          const msgBase = when
+            ? `New appointment request from ${patient} (${when}).`
+            : `New appointment request from ${patient}.`;
+          const message = notes ? `${msgBase} ${notes}` : msgBase;
+          return {
+            id: `apptreq-${base}`,
+            title: 'Appointment Request',
+            message,
+            timestamp: Number.isFinite(ts) && ts > 0 ? ts : Date.now(),
+            read: false,
+            status: 'pending',
+          } as NotificationItem;
+        });
+
+        const byId: Record<string, any> = {};
+        for (const it of Array.isArray(existing) ? existing : []) {
+          if (it?.id) byId[String(it.id)] = it;
+        }
+        for (const it of mapped) {
+          if (!byId[it.id]) byId[it.id] = it;
+        }
+        const merged = Object.values(byId)
+          .filter(Boolean)
+          .sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0));
+        await AsyncStorage.setItem(
+          'doctor_notifications',
+          JSON.stringify(merged),
+        );
+        return merged;
+      } catch {
+        return existing;
+      }
+    },
+    [API_BASE, getAuthHeaders, getCurrentUserName, nameMatches],
+  );
 
   const checkDueReminders = React.useCallback(async () => {
     try {
@@ -101,89 +202,79 @@ export default function DoctorNotification() {
     } catch {}
   }, []);
 
+  const loadNotifications = React.useCallback(async () => {
+    try {
+      // Ensure reminders due are pushed into notifications when opening this screen
+      await checkDueReminders();
+      // Load existing local notifications
+      const raw = await AsyncStorage.getItem('doctor_notifications');
+      let localArr: any[] = raw ? JSON.parse(raw) : [];
+      // Ingest appointment requests for this doctor and merge into local notifications
+      try {
+        localArr = await ingestAppointmentRequests(localArr);
+      } catch {}
+      // Fetch server notifications and merge
+      try {
+        const headers = await getAuthHeaders();
+        const res = await fetch(`${API_BASE}/api/notifications`, {
+          headers,
+        });
+        if (res.ok) {
+          const serverArr = await res.json();
+          // Normalize to common shape
+          const mapped = Array.isArray(serverArr)
+            ? serverArr.map((n: any) => ({
+                id: String(n.id),
+                title: String(n.title || 'Notification'),
+                message: String(n.message || ''),
+                timestamp: n.created_at
+                  ? new Date(n.created_at).getTime()
+                  : Date.now(),
+                read: Boolean(n.read) === true,
+              }))
+            : [];
+          // Merge by id (server wins)
+          const byId: Record<string, any> = {};
+          for (const it of localArr) {
+            if (it?.id) byId[String(it.id)] = it;
+          }
+          for (const it of mapped) {
+            byId[it.id] = { ...byId[it.id], ...it };
+          }
+          const merged = Object.values(byId)
+            .filter(Boolean)
+            .sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0));
+          await AsyncStorage.setItem(
+            'doctor_notifications',
+            JSON.stringify(merged),
+          );
+          setItems(merged as NotificationItem[]);
+        } else {
+          setItems(Array.isArray(localArr) ? localArr : []);
+        }
+      } catch {
+        setItems(Array.isArray(localArr) ? localArr : []);
+      }
+    } catch {
+      setItems([]);
+    }
+  }, [API_BASE, checkDueReminders, getAuthHeaders, ingestAppointmentRequests]);
+
   useFocusEffect(
     React.useCallback(() => {
-      (async () => {
-        try {
-          // Ensure reminders due are pushed into notifications when opening this screen
-          await checkDueReminders();
-          // Load existing local notifications
-          const raw = await AsyncStorage.getItem('doctor_notifications');
-          const localArr: any[] = raw ? JSON.parse(raw) : [];
-          // Fetch server notifications and merge
-          try {
-            const headers = await getAuthHeaders();
-            const res = await fetch(`${API_BASE}/api/notifications`, {
-              headers,
-            });
-            if (res.ok) {
-              const serverArr = await res.json();
-              // Normalize to common shape
-              const mapped = Array.isArray(serverArr)
-                ? serverArr.map((n: any) => ({
-                    id: String(n.id),
-                    title: String(n.title || 'Notification'),
-                    message: String(n.message || ''),
-                    timestamp: n.created_at
-                      ? new Date(n.created_at).getTime()
-                      : Date.now(),
-                    read: Boolean(n.read) === true,
-                  }))
-                : [];
-              // Merge by id (server wins)
-              const byId: Record<string, any> = {};
-              for (const it of localArr) {
-                if (it?.id) byId[String(it.id)] = it;
-              }
-              for (const it of mapped) {
-                byId[it.id] = { ...byId[it.id], ...it };
-              }
-              const merged = Object.values(byId)
-                .filter(Boolean)
-                .sort(
-                  (a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0),
-                );
-              await AsyncStorage.setItem(
-                'doctor_notifications',
-                JSON.stringify(merged),
-              );
-              setItems(merged as NotificationItem[]);
-            } else {
-              setItems(Array.isArray(localArr) ? localArr : []);
-            }
-          } catch {
-            setItems(Array.isArray(localArr) ? localArr : []);
-          }
-        } catch {
-          setItems([]);
-        }
-      })();
+      loadNotifications();
       return () => {};
-    }, [checkDueReminders, getAuthHeaders]),
+    }, [loadNotifications]),
   );
 
-  // Load avatar on focus so header profile icon reflects current avatar
-  useFocusEffect(
-    React.useCallback(() => {
-      (async () => {
-        try {
-          const rawS = await AsyncStorage.getItem('session');
-          if (rawS) {
-            const sess = JSON.parse(rawS);
-            const user = sess?.user || sess;
-            const uid = user?.id || user?.user_id || user?.uid;
-            const stored = uid
-              ? await AsyncStorage.getItem(`avatar_${uid}`)
-              : undefined;
-            setAvatarUri(
-              stored || user?.avatar_uri || user?.avatarUrl || undefined,
-            );
-          }
-        } catch {}
-      })();
-      return () => {};
-    }, []),
-  );
+  const onRefresh = React.useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await loadNotifications();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadNotifications]);
 
   const openDetail = (it: NotificationItem) => {
     setDetailItem(it);
@@ -251,51 +342,11 @@ export default function DoctorNotification() {
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
         {/* Header */}
-        <View style={[styles.header, { paddingTop: insets.top }]}>
-          <Image
-            source={require('../../assets/appicon.png')}
-            style={styles.headerLogo}
-            resizeMode="contain"
-          />
-          <View style={styles.headerIcons}>
-            <View>
-              <TouchableOpacity style={styles.iconBtn} onPress={() => {}}>
-                <Image
-                  source={require('../../assets/notification_icon.png')}
-                  style={styles.headerIconImg}
-                  resizeMode="contain"
-                />
-              </TouchableOpacity>
-              {unread > 0 && (
-                <View style={styles.badgeWrap}>
-                  <Text style={styles.badgeText}>{Math.min(99, unread)}</Text>
-                </View>
-              )}
-            </View>
-            <TouchableOpacity
-              style={styles.avatarBtn}
-              onPress={() => setShowProfileMenu(true)}
-            >
-              <View style={styles.avatarCircle}>
-                {avatarUri ? (
-                  <Image
-                    source={{ uri: avatarUri }}
-                    style={styles.avatarImg}
-                    resizeMode="cover"
-                  />
-                ) : (
-                  <Image
-                    source={require('../../assets/appicon.png')}
-                    style={styles.avatarImg}
-                    resizeMode="cover"
-                  />
-                )}
-              </View>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        <View style={styles.divider} />
+        <DoctorTopNav
+          unreadCount={unread}
+          onPressNotifications={() => {}}
+          onPressProfile={() => setShowProfileMenu(true)}
+        />
 
         <View style={styles.body}>
           <Text style={styles.title}>Notifications</Text>
@@ -304,6 +355,8 @@ export default function DoctorNotification() {
             keyExtractor={it => it.id}
             contentContainerStyle={{ paddingBottom: 120 }}
             ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+            refreshing={refreshing}
+            onRefresh={onRefresh}
             ListEmptyComponent={() => (
               <View style={{ paddingVertical: 18 }}>
                 <Text style={{ color: MUTED, textAlign: 'center' }}>
@@ -430,6 +483,21 @@ export default function DoctorNotification() {
                     }}
                   >
                     <Text style={styles.markBtnText}>Mark as Read</Text>
+                  </TouchableOpacity>
+                )}
+
+                {(String(detailItem?.title || '')
+                  .toLowerCase()
+                  .includes('appointment request') ||
+                  String(detailItem?.id || '').startsWith('apptreq-')) && (
+                  <TouchableOpacity
+                    style={styles.goBtn}
+                    onPress={() => {
+                      setShowDetail(false);
+                      navigation.navigate('DoctorAppointment');
+                    }}
+                  >
+                    <Text style={styles.goBtnText}>Go to Requests</Text>
                   </TouchableOpacity>
                 )}
                 <View style={{ flex: 1 }} />
@@ -599,27 +667,37 @@ const styles = StyleSheet.create({
   detailBody: { color: '#111827' },
   detailActions: { flexDirection: 'row', alignItems: 'center', marginTop: 14 },
   markBtn: {
-    paddingVertical: 10,
     paddingHorizontal: 14,
-    backgroundColor: '#F3F4F6',
+    paddingVertical: 10,
     borderRadius: 10,
-    borderWidth: 1,
-    borderColor: BORDER,
-  },
-  markBtnText: { color: '#111827', fontWeight: '700' },
-  okBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
     backgroundColor: GREEN,
-    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  okBtnText: { color: '#FFFFFF', fontWeight: '700' },
+  markBtnText: { color: '#FFFFFF', fontWeight: '700' },
+
+  goBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#111827',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 10,
+  },
+  goBtnText: { color: '#FFFFFF', fontWeight: '700' },
+
+  okBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  okBtnText: { color: '#111827', fontWeight: '700' },
 
   bottomBar: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
     height: 80,
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,

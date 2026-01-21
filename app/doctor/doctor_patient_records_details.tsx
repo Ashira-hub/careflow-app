@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   SafeAreaView,
   ScrollView,
+  RefreshControl,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -20,6 +21,7 @@ import {
   PatientRecord,
 } from '../../state/patient_records_store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import DoctorTopNav from './DoctorTopNav';
 
 const GREEN = '#10B981';
 const BORDER = '#E5E7EB';
@@ -34,29 +36,8 @@ export default function DoctorPatientRecordsDetails() {
   const route = useRoute<any>();
   const { patientName } = (route?.params || {}) as RouteParams;
   const [showProfileMenu, setShowProfileMenu] = React.useState(false);
-  const [avatarUri, setAvatarUri] = React.useState<string | undefined>(
-    undefined,
-  );
   const [unreadCount, setUnreadCount] = React.useState(0);
-
-  React.useEffect(() => {
-    (async () => {
-      try {
-        const rawS = await AsyncStorage.getItem('session');
-        if (rawS) {
-          const sess = JSON.parse(rawS);
-          const user = sess?.user || sess;
-          const uid = user?.id || user?.user_id || user?.uid;
-          const stored = uid
-            ? await AsyncStorage.getItem(`avatar_${uid}`)
-            : undefined;
-          setAvatarUri(
-            stored || user?.avatar_uri || user?.avatarUrl || undefined,
-          );
-        }
-      } catch {}
-    })();
-  }, []);
+  const [refreshing, setRefreshing] = React.useState(false);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -76,6 +57,24 @@ export default function DoctorPatientRecordsDetails() {
     }, []),
   );
 
+  const onRefresh = React.useCallback(async () => {
+    setRefreshing(true);
+    try {
+      try {
+        const rawN = await AsyncStorage.getItem('doctor_notifications');
+        const arrN = rawN ? JSON.parse(rawN) : [];
+        const n = Array.isArray(arrN)
+          ? arrN.filter((x: any) => !x?.read).length
+          : 0;
+        setUnreadCount(n);
+      } catch {
+        setUnreadCount(0);
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
+
   const record: PatientRecord | undefined = React.useMemo(() => {
     const name = (patientName || '').trim().toLowerCase();
     return getRecords().find(r => r.name.toLowerCase() === name);
@@ -85,62 +84,20 @@ export default function DoctorPatientRecordsDetails() {
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
         {/* Header */}
-        <View style={[styles.header, { paddingTop: insets.top }]}>
-          <Image
-            source={require('../../assets/appicon.png')}
-            style={styles.headerLogo}
-            resizeMode="contain"
-          />
-          <View style={styles.headerIcons}>
-            <View>
-              <TouchableOpacity
-                style={styles.iconBtn}
-                onPress={() =>
-                  navigation.navigate('DoctorNotification' as never)
-                }
-              >
-                <Image
-                  source={require('../../assets/notification_icon.png')}
-                  style={styles.headerIconImg}
-                  resizeMode="contain"
-                />
-              </TouchableOpacity>
-              {unreadCount > 0 && (
-                <View style={styles.notifBadgeWrap}>
-                  <Text style={styles.notifBadgeText}>
-                    {Math.min(99, unreadCount)}
-                  </Text>
-                </View>
-              )}
-            </View>
-            <TouchableOpacity
-              style={styles.avatarBtn}
-              onPress={() => setShowProfileMenu(true)}
-            >
-              <View style={styles.avatarCircle}>
-                {avatarUri ? (
-                  <Image
-                    source={{ uri: avatarUri }}
-                    style={styles.avatarImg}
-                    resizeMode="cover"
-                  />
-                ) : (
-                  <Image
-                    source={require('../../assets/appicon.png')}
-                    style={styles.avatarImg}
-                    resizeMode="cover"
-                  />
-                )}
-              </View>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        <View style={styles.divider} />
+        <DoctorTopNav
+          unreadCount={unreadCount}
+          onPressNotifications={() =>
+            navigation.navigate('DoctorNotification' as never)
+          }
+          onPressProfile={() => setShowProfileMenu(true)}
+        />
 
         <ScrollView
           contentContainerStyle={{ paddingBottom: 120 }}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
         >
           <View style={styles.topRow}>
             <Text style={styles.title}>Patient Record</Text>

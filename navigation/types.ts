@@ -19,6 +19,7 @@ export type RootStackParamList = {
   // Patient Screens
   PatientDashboard: undefined;
   PatientProfile: undefined;
+  PatientNotification: undefined;
   BookAppointment: undefined;
   MedicalRecords: undefined;
   PatientPrescription: undefined;

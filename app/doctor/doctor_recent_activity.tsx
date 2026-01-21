@@ -51,6 +51,16 @@ const DATA = [
 export default function DoctorRecentActivity() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
+  const [refreshing, setRefreshing] = React.useState(false);
+
+  const onRefresh = React.useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.resolve();
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
 
   const iconFor = (type: string) => {
     switch (type) {
@@ -82,6 +92,8 @@ export default function DoctorRecentActivity() {
         contentContainerStyle={{ padding: 16, paddingBottom: 24 }}
         data={DATA}
         keyExtractor={item => item.id}
+        refreshing={refreshing}
+        onRefresh={onRefresh}
         renderItem={({ item }) => (
           <TouchableOpacity style={styles.item} activeOpacity={0.85}>
             <View style={styles.itemLeft}>

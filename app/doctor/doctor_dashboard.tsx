@@ -10,6 +10,7 @@ import {
   Modal,
   FlatList,
   Alert,
+  RefreshControl,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -25,6 +26,8 @@ export default function DoctorDashboard() {
   const navigation = useNavigation<any>();
   const [showActivity, setShowActivity] = React.useState(false);
   const [showProfileMenu, setShowProfileMenu] = React.useState(false);
+  const [userName, setUserName] = React.useState('');
+  const [userRole, setUserRole] = React.useState('Doctor');
   const [activityData, setActivityData] = React.useState<
     Array<{
       id: string;
@@ -39,9 +42,7 @@ export default function DoctorDashboard() {
   const [prCount, setPrCount] = React.useState(0);
   const [reportCount, setReportCount] = React.useState(0);
   const [unreadCount, setUnreadCount] = React.useState(0);
-  const [avatarUri, setAvatarUri] = React.useState<string | undefined>(
-    undefined,
-  );
+  const [refreshing, setRefreshing] = React.useState(false);
   const API_BASE = 'https://backend-careflow.vercel.app';
   const [showWelcome, setShowWelcome] = React.useState(false);
   const [welcomeMsg, setWelcomeMsg] = React.useState<string>('');
@@ -66,136 +67,297 @@ export default function DoctorDashboard() {
     }
   }, []);
 
-  useFocusEffect(
-    React.useCallback(() => {
-      (async () => {
-        try {
-          const raw = await AsyncStorage.getItem('doctor_activity');
-          const arr = raw ? JSON.parse(raw) : [];
-          setActivityData(Array.isArray(arr) ? arr : []);
-        } catch {
-          setActivityData([]);
+  const getCurrentUserName = React.useCallback(async (): Promise<
+    string | undefined
+  > => {
+    try {
+      const raw = await AsyncStorage.getItem('session');
+      if (!raw) return undefined;
+      const sess = JSON.parse(raw);
+      return (
+        sess?.user?.full_name ||
+        sess?.user?.fullName ||
+        sess?.user?.name ||
+        sess?.full_name ||
+        sess?.name
+      );
+    } catch {
+      return undefined;
+    }
+  }, []);
+
+  const nameMatches = React.useCallback((pRaw: string, meRaw: string) => {
+    const p = String(pRaw || '')
+      .toLowerCase()
+      .trim();
+    const me = String(meRaw || '')
+      .toLowerCase()
+      .trim();
+    if (!p || !me) return false;
+    if (p === me) return true;
+    const meTokens = me.split(/\s+/).filter(Boolean);
+    if (meTokens.length > 0 && meTokens.every(t => p.includes(t))) return true;
+    const pTokens = p.split(/\s+/).filter(Boolean);
+    if (pTokens.length > 0 && pTokens.every(t => me.includes(t))) return true;
+    return false;
+  }, []);
+
+  const ingestAppointmentRequests = React.useCallback(
+    async (existing: any[]) => {
+      try {
+        const headers = await getAuthHeaders();
+        const myName = (await getCurrentUserName()) || '';
+        if (!myName) return existing;
+
+        const res = await fetch(`${API_BASE}/api/appointments`, { headers });
+        if (!res.ok) return existing;
+        const arr = await res.json();
+        const list = Array.isArray(arr) ? arr : [];
+        const mine = list.filter((a: any) => {
+          const createdBy = String(
+            a?.createdByName || a?.created_by_name || '',
+          );
+          const done = Boolean(a?.done);
+          return !done && nameMatches(createdBy, myName);
+        });
+
+        const mapped = mine.map((a: any) => {
+          const base = String(
+            a?.id ?? `${a?.patient || ''}-${a?.date || ''}-${a?.time || ''}`,
+          );
+          const ts = Date.parse(String(a?.created_at || a?.createdAt || ''));
+          const patient = String(a?.patient || 'A patient');
+          const date = String(a?.date || '');
+          const time = String(a?.time || '');
+          const notes = String(a?.notes || '').trim();
+          const when = [date, time].filter(Boolean).join(' ');
+          const msgBase = when
+            ? `New appointment request from ${patient} (${when}).`
+            : `New appointment request from ${patient}.`;
+          const message = notes ? `${msgBase} ${notes}` : msgBase;
+          return {
+            id: `apptreq-${base}`,
+            title: 'Appointment Request',
+            message,
+            timestamp: Number.isFinite(ts) && ts > 0 ? ts : Date.now(),
+            read: false,
+            status: 'pending',
+          };
+        });
+
+        const byId: Record<string, any> = {};
+        for (const it of Array.isArray(existing) ? existing : []) {
+          if (it?.id) byId[String(it.id)] = it;
         }
-        // Load unread notifications count
-        try {
-          const rawN = await AsyncStorage.getItem('doctor_notifications');
-          const arrN = rawN ? JSON.parse(rawN) : [];
-          const count = Array.isArray(arrN)
-            ? arrN.filter((n: any) => n && n.read === false).length
-            : 0;
-          setUnreadCount(count);
-        } catch {
-          setUnreadCount(0);
+        for (const it of mapped) {
+          if (!byId[it.id]) byId[it.id] = it;
         }
-        // Load counts
+        const merged = Object.values(byId)
+          .filter(Boolean)
+          .sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0));
+        await AsyncStorage.setItem(
+          'doctor_notifications',
+          JSON.stringify(merged),
+        );
+        return merged;
+      } catch {
+        return existing;
+      }
+    },
+    [API_BASE, getAuthHeaders, getCurrentUserName, nameMatches],
+  );
+
+  const loadDashboard = React.useCallback(async () => {
+    try {
+      try {
+        const raw = await AsyncStorage.getItem('doctor_activity');
+        const arr = raw ? JSON.parse(raw) : [];
+        setActivityData(Array.isArray(arr) ? arr : []);
+      } catch {
+        setActivityData([]);
+      }
+      // Load unread notifications count
+      try {
+        const rawN = await AsyncStorage.getItem('doctor_notifications');
+        let arrN: any[] = rawN ? JSON.parse(rawN) : [];
+        try {
+          arrN = await ingestAppointmentRequests(arrN);
+        } catch {}
+
         try {
           const headers = await getAuthHeaders();
-          // Appointments (pending)
-          try {
-            const res = await fetch(`${API_BASE}/api/appointments`, {
-              headers,
-            });
-            if (res.ok) {
-              const arr = await res.json();
-              setApptCount(
-                Array.isArray(arr)
-                  ? arr.filter((a: any) => !a?.done).length
-                  : 0,
-              );
-            } else {
-              setApptCount(0);
+          const res = await fetch(`${API_BASE}/api/notifications`, { headers });
+          if (res.ok) {
+            const serverArr = await res.json();
+            const mapped = Array.isArray(serverArr)
+              ? serverArr.map((n: any) => ({
+                  id: String(n.id),
+                  title: String(n.title || 'Notification'),
+                  message: String(n.message || ''),
+                  timestamp: n.created_at
+                    ? new Date(n.created_at).getTime()
+                    : Date.now(),
+                  read: Boolean(n.read) === true,
+                }))
+              : [];
+
+            const byId: Record<string, any> = {};
+            for (const it of Array.isArray(arrN) ? arrN : []) {
+              if (it?.id) byId[String(it.id)] = it;
             }
-          } catch {
+            for (const it of mapped) {
+              if (it?.id)
+                byId[String(it.id)] = { ...byId[String(it.id)], ...it };
+            }
+            const merged = Object.values(byId)
+              .filter(Boolean)
+              .sort(
+                (a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0),
+              );
+
+            await AsyncStorage.setItem(
+              'doctor_notifications',
+              JSON.stringify(merged),
+            );
+            arrN = merged;
+          }
+        } catch {}
+
+        const count = Array.isArray(arrN)
+          ? arrN.filter((n: any) => n && n.read === false).length
+          : 0;
+        setUnreadCount(count);
+      } catch {
+        setUnreadCount(0);
+      }
+      // Load counts
+      try {
+        const headers = await getAuthHeaders();
+        // Appointments (pending)
+        try {
+          const res = await fetch(`${API_BASE}/api/appointments`, {
+            headers,
+          });
+          if (res.ok) {
+            const arr = await res.json();
+            setApptCount(
+              Array.isArray(arr) ? arr.filter((a: any) => !a?.done).length : 0,
+            );
+          } else {
             setApptCount(0);
           }
-          // Prescriptions from AsyncStorage
-          try {
-            const rawRx = await AsyncStorage.getItem('prescriptions');
-            const list = rawRx ? JSON.parse(rawRx) : [];
-            const n = Array.isArray(list)
-              ? list.filter((p: any) => (p?.status || 'new') === 'new').length
-              : 0;
-            setRxCount(n);
-          } catch {
-            setRxCount(0);
-          }
-          // Patient Records count (distinct patients) via /api/patient-records
-          try {
-            const res2 = await fetch(`${API_BASE}/api/patient-records?own=1`, {
-              headers,
-            });
-            if (res2.ok) {
-              const rows = await res2.json();
-              setPrCount(Array.isArray(rows) ? rows.length : 0);
-            } else {
-              setPrCount(0);
-            }
-          } catch {
+        } catch {
+          setApptCount(0);
+        }
+        // Prescriptions from AsyncStorage
+        try {
+          const rawRx = await AsyncStorage.getItem('prescriptions');
+          const list = rawRx ? JSON.parse(rawRx) : [];
+          const n = Array.isArray(list)
+            ? list.filter((p: any) => (p?.status || 'new') === 'new').length
+            : 0;
+          setRxCount(n);
+        } catch {
+          setRxCount(0);
+        }
+        // Patient Records count (distinct patients) via /api/patient-records
+        try {
+          const res2 = await fetch(`${API_BASE}/api/patient-records?own=1`, {
+            headers,
+          });
+          if (res2.ok) {
+            const rows = await res2.json();
+            setPrCount(Array.isArray(rows) ? rows.length : 0);
+          } else {
             setPrCount(0);
           }
-          // Reports + Monthly counts from /api/patient-records/all (mirror Reports screen logic)
-          try {
-            const res3 = await fetch(`${API_BASE}/api/patient-records/all`, {
-              headers,
-            });
-            if (res3.ok) {
-              const rows = await res3.json();
-              const now = new Date();
-              const m = now.getMonth();
-              const y = now.getFullYear();
-              const inMonth = (ts?: number) => {
-                if (!ts) return false;
-                const d = new Date(ts);
-                return d.getMonth() === m && d.getFullYear() === y;
-              };
-              let apptM = 0;
-              let rxM = 0;
-              let totalM = 0;
-              for (const r of Array.isArray(rows) ? rows : []) {
-                const parsed = Date.parse(r?.created_at);
-                const ts = isNaN(parsed) ? Date.now() : parsed;
-                if (inMonth(ts)) {
-                  const isRx = !!(
-                    r?.medicine ||
-                    r?.dosage ||
-                    r?.dosage_strength
-                  );
-                  if (isRx) rxM += 1;
-                  else apptM += 1;
-                  totalM += 1;
-                }
+        } catch {
+          setPrCount(0);
+        }
+        // Reports + Monthly counts from /api/patient-records/all (mirror Reports screen logic)
+        try {
+          const res3 = await fetch(`${API_BASE}/api/patient-records/all`, {
+            headers,
+          });
+          if (res3.ok) {
+            const rows = await res3.json();
+            const now = new Date();
+            const m = now.getMonth();
+            const y = now.getFullYear();
+            const inMonth = (ts?: number) => {
+              if (!ts) return false;
+              const d = new Date(ts);
+              return d.getMonth() === m && d.getFullYear() === y;
+            };
+            let apptM = 0;
+            let rxM = 0;
+            let totalM = 0;
+            for (const r of Array.isArray(rows) ? rows : []) {
+              const parsed = Date.parse(r?.created_at);
+              const ts = isNaN(parsed) ? Date.now() : parsed;
+              if (inMonth(ts)) {
+                const isRx = !!(r?.medicine || r?.dosage || r?.dosage_strength);
+                if (isRx) rxM += 1;
+                else apptM += 1;
+                totalM += 1;
               }
-              setApptCount(apptM);
-              setRxCount(rxM);
-              setReportCount(totalM);
-            } else {
-              setReportCount(0);
             }
-          } catch {
+            setApptCount(apptM);
+            setRxCount(rxM);
+            setReportCount(totalM);
+          } else {
             setReportCount(0);
           }
-        } catch {}
-        // Load avatar from session
-        try {
-          const rawS = await AsyncStorage.getItem('session');
-          const sess = rawS ? JSON.parse(rawS) : null;
-          const uri = sess?.user?.avatar_uri || sess?.avatar_uri || undefined;
-          setAvatarUri(uri || undefined);
-        } catch {}
-        // Welcome banner
-        try {
-          const msg = await AsyncStorage.getItem('welcome_pending_message');
-          if (msg) {
-            setWelcomeMsg(msg);
-            setShowWelcome(true);
-            await AsyncStorage.removeItem('welcome_pending_message');
-            setTimeout(() => setShowWelcome(false), 4000);
-          }
-        } catch {}
-      })();
+        } catch {
+          setReportCount(0);
+        }
+      } catch {}
+      // Load session display name/role
+      try {
+        const rawS = await AsyncStorage.getItem('session');
+        const sess = rawS ? JSON.parse(rawS) : null;
+        const name =
+          sess?.user?.full_name ||
+          sess?.user?.fullName ||
+          sess?.user?.name ||
+          sess?.full_name ||
+          sess?.name ||
+          '';
+        const username = sess?.user?.username || sess?.username || '';
+        const email = sess?.user?.email || sess?.email || '';
+        const role = sess?.user?.role || sess?.role || 'Doctor';
+        const displayName = String(name || username || email || 'Doctor');
+        setUserName(displayName);
+        setUserRole(String(role || 'Doctor'));
+      } catch {}
+      // Welcome banner
+      try {
+        const msg = await AsyncStorage.getItem('welcome_pending_message');
+        if (msg) {
+          setWelcomeMsg(msg);
+          setShowWelcome(true);
+          await AsyncStorage.removeItem('welcome_pending_message');
+          setTimeout(() => setShowWelcome(false), 4000);
+        }
+      } catch {}
+    } catch {}
+  }, [API_BASE, getAuthHeaders, ingestAppointmentRequests]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      loadDashboard();
       return () => {};
-    }, [getAuthHeaders]),
+    }, [loadDashboard]),
   );
+
+  const onRefresh = React.useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await loadDashboard();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadDashboard]);
   const addActivity = React.useCallback(
     async (item: {
       id?: string;
@@ -240,13 +402,13 @@ export default function DoctorDashboard() {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
-        <View style={[styles.header, { paddingTop: insets.top }]}>
+        <View style={[styles.topHeader, { paddingTop: insets.top }]}>
           <Image
             source={require('../../assets/appicon.png')}
-            style={styles.headerLogo}
+            style={styles.topHeaderLogo}
             resizeMode="contain"
           />
-          <View style={styles.headerIcons}>
+          <View style={styles.topHeaderIcons}>
             <TouchableOpacity
               style={styles.iconBtn}
               onPress={async () => {
@@ -260,7 +422,7 @@ export default function DoctorDashboard() {
               <View style={{ position: 'relative' }}>
                 <Image
                   source={require('../../assets/notification_icon.png')}
-                  style={styles.headerIconImg}
+                  style={styles.topHeaderIconImg}
                   resizeMode="contain"
                 />
                 {unreadCount > 0 && (
@@ -292,29 +454,35 @@ export default function DoctorDashboard() {
               </View>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.avatarBtn}
+              style={styles.topProfileBtn}
               onPress={() => setShowProfileMenu(true)}
+              activeOpacity={0.8}
             >
-              <View style={styles.avatarCircle}>
-                {avatarUri ? (
-                  <Image
-                    source={{ uri: avatarUri }}
-                    style={styles.avatarImg}
-                    resizeMode="cover"
-                  />
-                ) : (
-                  <Image
-                    source={require('../../assets/appicon.png')}
-                    style={styles.avatarImg}
-                    resizeMode="cover"
-                  />
-                )}
+              <View style={styles.topProfileAvatar}>
+                <Text style={styles.topProfileAvatarText}>
+                  {String(userName || 'D')
+                    .charAt(0)
+                    .toUpperCase()}
+                </Text>
               </View>
+              <View style={styles.topProfileTextCol}>
+                <Text style={styles.topProfileName} numberOfLines={1}>
+                  {String(userName || 'Doctor')}
+                </Text>
+                <Text style={styles.topProfileRole} numberOfLines={1}>
+                  {String(userRole || 'Doctor')}
+                </Text>
+              </View>
+              <Image
+                source={require('../../assets/dropdown.png')}
+                style={styles.topProfileChevron}
+                resizeMode="contain"
+              />
             </TouchableOpacity>
           </View>
         </View>
 
-        <View style={styles.divider} />
+        <View style={styles.topDivider} />
 
         {showWelcome && (
           <View style={[styles.welcomeBanner, { top: insets.top + 48 }]}>
@@ -330,6 +498,9 @@ export default function DoctorDashboard() {
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
         >
           <Text style={styles.title}>Dashboard</Text>
           <View style={styles.sectionDivider} />
@@ -774,6 +945,60 @@ function BottomItem({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#FFFFFF' },
   container: { flex: 1 },
+  topHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#FFFFFF',
+    marginTop: 8,
+  },
+  topHeaderLogo: { width: 40, height: 40 },
+  topHeaderIcons: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  topHeaderIconImg: { width: 20, height: 20, tintColor: GREEN },
+  topProfileBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+    borderRadius: 0,
+    backgroundColor: 'transparent',
+  },
+  topProfileAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: GREEN,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topProfileAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  topProfileTextCol: {
+    marginLeft: 12,
+    marginRight: 10,
+    maxWidth: 160,
+  },
+  topProfileName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  topProfileRole: {
+    fontSize: 12,
+    color: MUTED,
+    marginTop: 2,
+  },
+  topProfileChevron: {
+    width: 14,
+    height: 14,
+    tintColor: '#111827',
+  },
+  topDivider: { height: 1, backgroundColor: BORDER },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

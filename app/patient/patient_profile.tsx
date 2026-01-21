@@ -8,8 +8,6 @@ import {
   Image,
   SafeAreaView,
   TextInput,
-  Platform,
-  StatusBar,
   useWindowDimensions,
 } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -58,6 +56,9 @@ const PatientProfile = () => {
   const insets = useSafeAreaInsets();
   const navigation =
     useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const [topUserName, setTopUserName] = useState('');
+  const [topUserRole, setTopUserRole] = useState('Patient');
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [avatarUri, setAvatarUri] = useState<string | undefined>(undefined);
   const { width } = useWindowDimensions();
@@ -259,6 +260,19 @@ const PatientProfile = () => {
           const raw = await AsyncStorage.getItem('session');
           if (!raw) return;
           const sess = JSON.parse(raw);
+          const u = sess?.user || {};
+          const derivedName =
+            u?.full_name ||
+            u?.fullName ||
+            u?.name ||
+            [u?.firstName, u?.lastName].filter(Boolean).join(' ');
+          setTopUserName(String(derivedName || 'Patient'));
+          const rawRole = u?.role || u?.role_name || u?.roleName;
+          const roleStr = String(rawRole || '').trim();
+          const displayRole = roleStr
+            ? roleStr.charAt(0).toUpperCase() + roleStr.slice(1)
+            : 'Patient';
+          setTopUserRole(displayRole);
           const uri = sess?.user?.avatar_uri || sess?.avatar_uri || undefined;
           setAvatarUri(uri || undefined);
           const next = {
@@ -303,6 +317,54 @@ const PatientProfile = () => {
 
   return (
     <SafeAreaView style={styles.safeArea}>
+      <View style={[styles.topHeader, { paddingTop: insets.top }]}>
+        <Image
+          source={require('../../assets/appicon.png')}
+          style={styles.topHeaderLogo}
+          resizeMode="contain"
+        />
+        <View style={styles.topHeaderIcons}>
+          <TouchableOpacity
+            style={styles.iconBtn}
+            onPress={() => navigation.navigate('PatientNotification')}
+          >
+            <View style={{ position: 'relative' }}>
+              <Image
+                source={require('../../assets/notification_icon.png')}
+                style={styles.topHeaderIconImg}
+                resizeMode="contain"
+              />
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.topProfileBtn}
+            onPress={() => setShowProfileMenu(true)}
+            activeOpacity={0.8}
+          >
+            <View style={styles.topProfileAvatar}>
+              <Text style={styles.topProfileAvatarText}>
+                {String(topUserName || 'P')
+                  .charAt(0)
+                  .toUpperCase()}
+              </Text>
+            </View>
+            <View style={styles.topProfileTextCol}>
+              <Text style={styles.topProfileName} numberOfLines={1}>
+                {String(topUserName || 'Patient')}
+              </Text>
+              <Text style={styles.topProfileRole} numberOfLines={1}>
+                {String(topUserRole || 'Patient')}
+              </Text>
+            </View>
+            <Image
+              source={require('../../assets/dropdown.png')}
+              style={styles.topProfileChevron}
+              resizeMode="contain"
+            />
+          </TouchableOpacity>
+        </View>
+      </View>
+      <View style={styles.topDivider} />
       <ScrollView
         style={styles.container}
         contentContainerStyle={styles.contentContainer}
@@ -578,8 +640,57 @@ const PatientProfile = () => {
         </View>
       </ScrollView>
 
+      {showProfileMenu && (
+        <View style={styles.dropdownOverlay}>
+          <TouchableOpacity
+            style={{ flex: 1 }}
+            activeOpacity={1}
+            onPress={() => setShowProfileMenu(false)}
+          />
+          <View
+            style={[
+              styles.dropdownCard,
+              { top: (insets.top || 0) + 60, right: 16 },
+            ]}
+          >
+            <TouchableOpacity
+              style={styles.dropdownItem}
+              onPress={() => {
+                setShowProfileMenu(false);
+                navigation.navigate('PatientProfile');
+              }}
+            >
+              <Text style={styles.dropdownText}>Profile</Text>
+            </TouchableOpacity>
+            <View style={styles.menuDivider} />
+            <TouchableOpacity
+              style={styles.dropdownItem}
+              onPress={async () => {
+                setShowProfileMenu(false);
+                try {
+                  await AsyncStorage.removeItem('session');
+                } catch {}
+                navigation.reset({
+                  index: 0,
+                  routes: [{ name: 'Login' }],
+                } as any);
+              }}
+            >
+              <Text style={[styles.dropdownText, { color: '#EF4444' }]}>
+                Logout
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
       {/* Bottom Navigation */}
-      <View style={[styles.bottomNav, { paddingBottom: insets.bottom }]}>
+      <View
+        style={[
+          styles.bottomNav,
+          { paddingBottom: Math.max(0, (insets.bottom || 0) - 8) },
+        ]}
+      >
         <BottomItem
           label="Home"
           active={false}
@@ -596,7 +707,7 @@ const PatientProfile = () => {
           label="Prescription"
           active={false}
           source={require('../../assets/prescription_icon.png')}
-          onPress={() => navigation.navigate('MedicalRecords')}
+          onPress={() => navigation.navigate('PatientPrescription')}
         />
         <BottomItem
           label="Records"
@@ -613,8 +724,66 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#f8f9fa',
-    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
   },
+  topHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+    marginTop: 8,
+  },
+  topHeaderLogo: { width: 40, height: 40 },
+  topHeaderIcons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  iconBtn: { padding: 8 },
+  topHeaderIconImg: { width: 20, height: 20, tintColor: '#10B981' },
+  topProfileBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+    borderRadius: 0,
+    backgroundColor: 'transparent',
+  },
+  topProfileAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#10B981',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topProfileAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  topProfileTextCol: {
+    marginLeft: 12,
+    marginRight: 10,
+    maxWidth: 160,
+  },
+  topProfileName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  topProfileRole: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  topProfileChevron: {
+    width: 14,
+    height: 14,
+    tintColor: '#111827',
+  },
+  topDivider: { height: 1, backgroundColor: '#E5E7EB' },
   container: {
     flex: 1,
     backgroundColor: '#f3f4f6',
@@ -835,12 +1004,34 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     marginTop: 8,
   },
+  dropdownOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+  },
+  dropdownCard: {
+    position: 'absolute',
+    width: 180,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    paddingVertical: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  dropdownItem: { paddingVertical: 10, paddingHorizontal: 12 },
+  dropdownText: { color: '#111827', fontWeight: '700' },
+  menuDivider: { height: 1, backgroundColor: '#E5E7EB' },
   // Bottom Navigation Styles
   bottomNav: {
     flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'center',
-    paddingVertical: 8,
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',
@@ -851,21 +1042,25 @@ const styles = StyleSheet.create({
     height: 80,
   },
   bottomItem: {
+    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
     flex: 1,
-    paddingVertical: 8,
+    paddingVertical: 0,
     height: '100%',
   },
   bottomImg: {
-    width: 24,
-    height: 24,
+    width: 28,
+    height: 28,
     marginBottom: 4,
   },
   bottomLabel: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#6B7280',
     textAlign: 'center',
+    width: '100%',
+    alignSelf: 'center',
+    marginTop: 2,
   },
 });
 

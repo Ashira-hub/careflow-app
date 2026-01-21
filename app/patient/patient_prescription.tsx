@@ -9,10 +9,10 @@ import {
   Image,
   SafeAreaView,
   FlatList,
-  Platform,
-  StatusBar,
   Modal,
   Share,
+  Alert,
+  Platform,
 } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -71,25 +71,159 @@ const PatientPrescription = () => {
   const navigation =
     useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
+  const [userName, setUserName] = useState('');
+  const [userRole, setUserRole] = useState('Patient');
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [list, setList] = useState<Prescription[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [selected, setSelected] = useState<Prescription | null>(null);
   const [showModal, setShowModal] = useState(false);
+
+  const loadUserData = React.useCallback(async () => {
+    try {
+      const session = await AsyncStorage.getItem('session');
+      if (session) {
+        const { user } = JSON.parse(session);
+        const derivedName =
+          user?.full_name ||
+          user?.fullName ||
+          user?.name ||
+          [user?.firstName, user?.lastName].filter(Boolean).join(' ');
+        setUserName(derivedName || 'Patient');
+        const rawRole = user?.role || user?.role_name || user?.roleName;
+        const roleStr = String(rawRole || '').trim();
+        const displayRole = roleStr
+          ? roleStr.charAt(0).toUpperCase() + roleStr.slice(1)
+          : 'Patient';
+        setUserRole(displayRole);
+      }
+    } catch {}
+  }, []);
+
+  const buildPrescriptionHtml = React.useCallback(
+    (items: Prescription[], patient: string) => {
+      const esc = (s: string) =>
+        String(s || '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+
+      const rows = (items || [])
+        .map(p => {
+          const date = p.date ? new Date(p.date).toLocaleDateString() : '';
+          return `
+            <tr>
+              <td>${esc(p.medicine)}</td>
+              <td>${esc(p.dosage || '')}</td>
+              <td>${esc(p.instructions || '')}</td>
+              <td>${esc(p.doctor ? `Dr. ${p.doctor}` : '')}</td>
+              <td>${esc(date)}</td>
+              <td>${esc(p.status || '')}</td>
+            </tr>
+          `;
+        })
+        .join('');
+
+      return `
+        <!doctype html>
+        <html>
+          <head>
+            <meta charset="utf-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <style>
+              body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial; padding: 16px; color: #111827; }
+              h1 { font-size: 18px; margin: 0 0 4px; }
+              .meta { font-size: 12px; color: #6B7280; margin-bottom: 12px; }
+              table { width: 100%; border-collapse: collapse; }
+              th, td { border: 1px solid #E5E7EB; padding: 8px; font-size: 12px; vertical-align: top; }
+              th { background: #F9FAFB; text-align: left; }
+            </style>
+          </head>
+          <body>
+            <h1>Prescription List</h1>
+            <div class="meta">Patient: ${esc(
+              patient || 'Patient',
+            )} • Generated: ${esc(new Date().toLocaleString())}</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Medicine</th>
+                  <th>Dosage</th>
+                  <th>Instructions</th>
+                  <th>Doctor</th>
+                  <th>Date</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows || '<tr><td colspan="6">No prescriptions</td></tr>'}
+              </tbody>
+            </table>
+          </body>
+        </html>
+      `;
+    },
+    [],
+  );
+
   const handlePrint = React.useCallback(async () => {
     try {
-      const lines = (list || []).map((p, i) => {
-        const d = new Date(p.date || '').toLocaleDateString();
-        return `${i + 1}. ${p.medicine}${p.dosage ? ` (${p.dosage})` : ''}${
-          p.instructions ? ` - ${p.instructions}` : ''
-        }${p.doctor ? ` • Dr. ${p.doctor}` : ''} • ${d}${
-          p.status ? ` • ${p.status}` : ''
-        }`;
+      if (!list || list.length === 0) {
+        Alert.alert('Print', 'No prescriptions to print.');
+        return;
+      }
+
+      let RNHTMLtoPDF: any;
+      let RNPrint: any;
+      try {
+        RNHTMLtoPDF = require('react-native-html-to-pdf');
+        RNPrint = require('react-native-print');
+      } catch {
+        const lines = (list || []).map((p, i) => {
+          const d = new Date(p.date || '').toLocaleDateString();
+          return `${i + 1}. ${p.medicine}${p.dosage ? ` (${p.dosage})` : ''}${
+            p.instructions ? ` - ${p.instructions}` : ''
+          }${p.doctor ? ` • Dr. ${p.doctor}` : ''} • ${d}${
+            p.status ? ` • ${p.status}` : ''
+          }`;
+        });
+        const message = lines.join('\n');
+        Alert.alert(
+          'Missing PDF/Print library',
+          'To print a PDF, install react-native-html-to-pdf and react-native-print. For now, sharing text instead.',
+        );
+        await Share.share({ message });
+        return;
+      }
+
+      const patient = userName || 'Patient';
+      const html = buildPrescriptionHtml(list, String(patient));
+      const fileName = `prescriptions_${Date.now()}`;
+
+      const pdf = await RNHTMLtoPDF.convert({
+        html,
+        fileName,
+        base64: false,
       });
-      const message = lines.join('\n') || 'No prescriptions to print.';
-      await Share.share({ message });
-    } catch {}
-  }, [list]);
+
+      const filePath = pdf?.filePath;
+      if (!filePath) {
+        Alert.alert('Print', 'Failed to generate PDF.');
+        return;
+      }
+
+      await RNPrint.print({ filePath });
+      if (Platform.OS === 'android') {
+        // Android print dialog opens; nothing else needed.
+      }
+    } catch {
+      Alert.alert('Print', 'Failed to print PDF.');
+    }
+  }, [buildPrescriptionHtml, list, userName]);
 
   const getAuthHeaders = React.useCallback(async () => {
     try {
@@ -193,8 +327,9 @@ const PatientPrescription = () => {
   useFocusEffect(
     React.useCallback(() => {
       loadPrescriptions();
+      loadUserData();
       return () => {};
-    }, [loadPrescriptions]),
+    }, [loadPrescriptions, loadUserData]),
   );
 
   const onRefresh = React.useCallback(async () => {
@@ -264,6 +399,54 @@ const PatientPrescription = () => {
 
   return (
     <SafeAreaView style={styles.safeArea}>
+      <View style={[styles.topHeader, { paddingTop: insets.top }]}>
+        <Image
+          source={require('../../assets/appicon.png')}
+          style={styles.topHeaderLogo}
+          resizeMode="contain"
+        />
+        <View style={styles.topHeaderIcons}>
+          <TouchableOpacity
+            style={styles.iconBtn}
+            onPress={() => navigation.navigate('PatientNotification')}
+          >
+            <View style={{ position: 'relative' }}>
+              <Image
+                source={require('../../assets/notification_icon.png')}
+                style={styles.topHeaderIconImg}
+                resizeMode="contain"
+              />
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.topProfileBtn}
+            onPress={() => setShowProfileMenu(true)}
+            activeOpacity={0.8}
+          >
+            <View style={styles.topProfileAvatar}>
+              <Text style={styles.topProfileAvatarText}>
+                {String(userName || 'P')
+                  .charAt(0)
+                  .toUpperCase()}
+              </Text>
+            </View>
+            <View style={styles.topProfileTextCol}>
+              <Text style={styles.topProfileName} numberOfLines={1}>
+                {String(userName || 'Patient')}
+              </Text>
+              <Text style={styles.topProfileRole} numberOfLines={1}>
+                {String(userRole || 'Patient')}
+              </Text>
+            </View>
+            <Image
+              source={require('../../assets/dropdown.png')}
+              style={styles.topProfileChevron}
+              resizeMode="contain"
+            />
+          </TouchableOpacity>
+        </View>
+      </View>
+      <View style={styles.topDivider} />
       <View style={styles.container}>
         <View style={styles.headerContainer}>
           <Text style={styles.header}>My Prescriptions</Text>
@@ -384,8 +567,57 @@ const PatientPrescription = () => {
         </View>
       </Modal>
 
+      {showProfileMenu && (
+        <View style={styles.dropdownOverlay}>
+          <TouchableOpacity
+            style={{ flex: 1 }}
+            activeOpacity={1}
+            onPress={() => setShowProfileMenu(false)}
+          />
+          <View
+            style={[
+              styles.dropdownCard,
+              { top: (insets.top || 0) + 60, right: 16 },
+            ]}
+          >
+            <TouchableOpacity
+              style={styles.dropdownItem}
+              onPress={() => {
+                setShowProfileMenu(false);
+                navigation.navigate('PatientProfile');
+              }}
+            >
+              <Text style={styles.dropdownText}>Profile</Text>
+            </TouchableOpacity>
+            <View style={styles.menuDivider} />
+            <TouchableOpacity
+              style={styles.dropdownItem}
+              onPress={async () => {
+                setShowProfileMenu(false);
+                try {
+                  await AsyncStorage.removeItem('session');
+                } catch {}
+                navigation.reset({
+                  index: 0,
+                  routes: [{ name: 'Login' }],
+                } as any);
+              }}
+            >
+              <Text style={[styles.dropdownText, { color: '#EF4444' }]}>
+                Logout
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
       {/* Bottom Navigation */}
-      <View style={[styles.bottomNav, { paddingBottom: insets.bottom }]}>
+      <View
+        style={[
+          styles.bottomNav,
+          { paddingBottom: Math.max(0, (insets.bottom || 0) - 8) },
+        ]}
+      >
         <BottomItem
           label="Home"
           active={false}
@@ -419,22 +651,78 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#FFFFFF',
-    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
   },
+  topHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+    marginTop: 8,
+  },
+  topHeaderLogo: { width: 40, height: 40 },
+  topHeaderIcons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  iconBtn: { padding: 8 },
+  topHeaderIconImg: { width: 20, height: 20, tintColor: '#10B981' },
+  topProfileBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+    borderRadius: 0,
+    backgroundColor: 'transparent',
+  },
+  topProfileAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#10B981',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topProfileAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  topProfileTextCol: {
+    marginLeft: 12,
+    marginRight: 10,
+    maxWidth: 160,
+  },
+  topProfileName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  topProfileRole: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  topProfileChevron: {
+    width: 14,
+    height: 14,
+    tintColor: '#111827',
+  },
+  topDivider: { height: 1, backgroundColor: '#E5E7EB' },
   container: {
     flex: 1,
     backgroundColor: '#fff',
   },
   headerContainer: {
     padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
   },
   header: {
     fontSize: 24,
     fontWeight: 'bold',
     color: '#111827',
-    marginTop: 8,
+    marginTop: 0,
   },
   searchContainer: {
     flexDirection: 'row',
@@ -560,7 +848,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'center',
-    paddingVertical: 8,
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',
@@ -571,22 +858,49 @@ const styles = StyleSheet.create({
     height: 80,
   },
   bottomItem: {
+    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
     flex: 1,
-    paddingVertical: 8,
+    paddingVertical: 0,
     height: '100%',
   },
   bottomImg: {
-    width: 24,
-    height: 24,
+    width: 28,
+    height: 28,
     marginBottom: 4,
   },
   bottomLabel: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#6B7280',
     textAlign: 'center',
+    width: '100%',
+    alignSelf: 'center',
+    marginTop: 2,
   },
+  dropdownOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+  },
+  dropdownCard: {
+    position: 'absolute',
+    width: 180,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    paddingVertical: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  dropdownItem: { paddingVertical: 10, paddingHorizontal: 12 },
+  dropdownText: { color: '#111827', fontWeight: '700' },
+  menuDivider: { height: 1, backgroundColor: '#E5E7EB' },
   // Modal
   modalOverlay: {
     flex: 1,

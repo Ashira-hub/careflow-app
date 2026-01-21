@@ -9,10 +9,12 @@ import {
   ScrollView,
   TextInput,
   Alert,
+  RefreshControl,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import DoctorTopNav from './DoctorTopNav';
 
 const GREEN = '#10B981';
 const BORDER = '#E5E7EB';
@@ -33,6 +35,7 @@ export default function DoctorProfile() {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [avatarUri, setAvatarUri] = useState<string | undefined>(undefined);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
 
   const initials = useMemo(() => {
     const parts = (name || '').trim().split(/\s+/);
@@ -162,6 +165,30 @@ export default function DoctorProfile() {
     }, [loadSession, fetchProfileFromDatabase]),
   );
 
+  const onRefresh = React.useCallback(async () => {
+    setRefreshing(true);
+    try {
+      try {
+        await loadSession();
+      } catch {}
+      try {
+        await fetchProfileFromDatabase();
+      } catch {}
+      try {
+        const rawN = await AsyncStorage.getItem('doctor_notifications');
+        const arrN = rawN ? JSON.parse(rawN) : [];
+        const n = Array.isArray(arrN)
+          ? arrN.filter((x: any) => !x?.read).length
+          : 0;
+        setUnreadCount(n);
+      } catch {
+        setUnreadCount(0);
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }, [fetchProfileFromDatabase, loadSession]);
+
   const pickImage = () => {
     let pkg: any;
     try {
@@ -207,62 +234,20 @@ export default function DoctorProfile() {
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
         {/* Header */}
-        <View style={[styles.header, { paddingTop: insets.top }]}>
-          <Image
-            source={require('../../assets/appicon.png')}
-            style={styles.headerLogo}
-            resizeMode="contain"
-          />
-          <View style={styles.headerIcons}>
-            <View>
-              <TouchableOpacity
-                style={styles.iconBtn}
-                onPress={() =>
-                  navigation.navigate('DoctorNotification' as never)
-                }
-              >
-                <Image
-                  source={require('../../assets/notification_icon.png')}
-                  style={styles.headerIconImg}
-                  resizeMode="contain"
-                />
-              </TouchableOpacity>
-              {unreadCount > 0 && (
-                <View style={styles.notifBadgeWrap}>
-                  <Text style={styles.notifBadgeText}>
-                    {Math.min(99, unreadCount)}
-                  </Text>
-                </View>
-              )}
-            </View>
-            <TouchableOpacity
-              style={styles.avatarBtn}
-              onPress={() => setShowProfileMenu(true)}
-            >
-              <View style={styles.avatarCircle}>
-                {avatarUri ? (
-                  <Image
-                    source={{ uri: avatarUri }}
-                    style={styles.avatarImgSm}
-                    resizeMode="cover"
-                  />
-                ) : (
-                  <Image
-                    source={require('../../assets/appicon.png')}
-                    style={styles.avatarImgSm}
-                    resizeMode="cover"
-                  />
-                )}
-              </View>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        <View style={styles.divider} />
+        <DoctorTopNav
+          unreadCount={unreadCount}
+          onPressNotifications={() =>
+            navigation.navigate('DoctorNotification' as never)
+          }
+          onPressProfile={() => setShowProfileMenu(true)}
+        />
 
         <ScrollView
           contentContainerStyle={{ paddingBottom: 80 }}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
         >
           <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
             <Text style={styles.screenTitle}>Profile</Text>

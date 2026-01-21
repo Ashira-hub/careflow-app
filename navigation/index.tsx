@@ -68,6 +68,10 @@ export default function AppNavigator() {
         component={require('../app/patient/patient_profile').default}
       />
       <Stack.Screen
+        name="PatientNotification"
+        component={require('../app/patient/patient_notification').default}
+      />
+      <Stack.Screen
         name="BookAppointment"
         component={require('../app/patient/patient_appointment').default}
       />
