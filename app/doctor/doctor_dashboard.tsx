@@ -180,15 +180,17 @@ export default function DoctorDashboard() {
       try {
         const rawN = await AsyncStorage.getItem('doctor_notifications');
         let arrN: any[] = rawN ? JSON.parse(rawN) : [];
-        try {
-          arrN = await ingestAppointmentRequests(arrN);
-        } catch {}
 
         try {
           const headers = await getAuthHeaders();
           const res = await fetch(`${API_BASE}/api/notifications`, { headers });
           if (res.ok) {
             const serverArr = await res.json();
+            arrN = Array.isArray(arrN)
+              ? arrN.filter(
+                  (x: any) => !String(x?.id || '').startsWith('apptreq-'),
+                )
+              : [];
             const mapped = Array.isArray(serverArr)
               ? serverArr.map((n: any) => ({
                   id: String(n.id),
@@ -220,6 +222,10 @@ export default function DoctorDashboard() {
               JSON.stringify(merged),
             );
             arrN = merged;
+          } else {
+            try {
+              arrN = await ingestAppointmentRequests(arrN);
+            } catch {}
           }
         } catch {}
 

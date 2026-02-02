@@ -31,6 +31,7 @@ interface MedicalRecord {
   date: string;
   doctor?: string;
   status?: 'pending' | 'completed' | 'cancelled';
+  notes?: string;
 }
 
 // Bottom Navigation Item Component
@@ -73,6 +74,7 @@ const PatientRecords = () => {
   const [userName, setUserName] = useState('');
   const [userRole, setUserRole] = useState('Patient');
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<RecordType>('all');
   const [records, setRecords] = useState<MedicalRecord[]>([]);
@@ -104,6 +106,54 @@ const PatientRecords = () => {
     }
   }, []);
 
+  const syncUnread = React.useCallback(async () => {
+    try {
+      const rawLocal = await AsyncStorage.getItem('patient_notifications');
+      const localArr: any[] = rawLocal ? JSON.parse(rawLocal) : [];
+      const byId: Record<string, any> = {};
+      if (Array.isArray(localArr)) {
+        for (const it of localArr) {
+          if (it?.id) byId[String(it.id)] = it;
+        }
+      }
+
+      try {
+        const headers = await getAuthHeaders();
+        const res = await fetch(`${API_BASE}/api/notifications`, { headers });
+        if (res.ok) {
+          const rows = await res.json();
+          const mapped = Array.isArray(rows)
+            ? rows.map((n: any) => ({
+                id: String(n?.id),
+                title: String(n?.title || 'Notification'),
+                message: String(n?.message || ''),
+                timestamp: n?.created_at
+                  ? new Date(n.created_at).getTime()
+                  : Date.now(),
+                read: Boolean(n?.read) === true,
+              }))
+            : [];
+          for (const it of mapped) {
+            if (it?.id) byId[String(it.id)] = { ...byId[String(it.id)], ...it };
+          }
+        }
+      } catch {}
+
+      const merged = Object.values(byId)
+        .filter(Boolean)
+        .sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0));
+      try {
+        await AsyncStorage.setItem(
+          'patient_notifications',
+          JSON.stringify(merged),
+        );
+      } catch {}
+      setUnreadCount(merged.filter((n: any) => n && n.read === false).length);
+    } catch {
+      setUnreadCount(0);
+    }
+  }, [getAuthHeaders]);
+
   const loadUserData = React.useCallback(async () => {
     try {
       const session = await AsyncStorage.getItem('session');
@@ -132,12 +182,16 @@ const PatientRecords = () => {
       const raw = await AsyncStorage.getItem('session');
       if (!raw) return undefined;
       const sess = JSON.parse(raw);
+      const u = sess?.user || {};
       return (
-        sess?.user?.full_name ||
-        sess?.user?.fullName ||
-        sess?.user?.name ||
+        u?.full_name ||
+        u?.fullName ||
+        u?.name ||
+        [u?.firstName, u?.lastName].filter(Boolean).join(' ') ||
         sess?.full_name ||
-        sess?.name
+        sess?.name ||
+        [sess?.firstName, sess?.lastName].filter(Boolean).join(' ') ||
+        undefined
       );
     } catch {
       return undefined;
@@ -148,6 +202,196 @@ const PatientRecords = () => {
     try {
       const headers = await getAuthHeaders();
       const myName = (await getCurrentUserName()) || '';
+
+      const fetchFirstOk = async (paths: string[]) => {
+        for (const p of paths) {
+          try {
+            const res = await fetch(`${API_BASE}${p}`, { headers });
+            if (!res.ok) continue;
+            const data = await res.json().catch(() => null);
+            return data;
+          } catch {}
+        }
+        return null;
+      };
+
+      const normalizeRows = (data: any): any[] => {
+        return Array.isArray(data)
+          ? data
+          : Array.isArray(data?.rows)
+          ? data.rows
+          : Array.isArray(data?.data)
+          ? data.data
+          : Array.isArray(data?.results)
+          ? data.results
+          : [];
+      };
+
+      const buildLabNotes = (r: any): string | undefined => {
+        const formatValue = (v: any) => {
+          if (v == null) return '';
+          if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '';
+          if (typeof v === 'string') return v.trim();
+          if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+          try {
+            return JSON.stringify(v);
+          } catch {
+            return String(v);
+          }
+        };
+
+        const normalizeLabel = (k: string) => {
+          const key = String(k || '').trim();
+          if (!key) return '';
+          const upper = key.toUpperCase();
+          const map: Record<string, string> = {
+            WBC: 'WBC',
+            RBC: 'RBC',
+            HGB: 'HGB',
+            HEMOGLOBIN: 'HGB',
+            HCT: 'HCT',
+            HEMATOCRIT: 'HCT',
+            PLT: 'PLT',
+            PLATELET: 'PLT',
+            PLATELETS: 'PLT',
+            MCV: 'MCV',
+            MCH: 'MCH',
+            MCHC: 'MCHC',
+            RDW: 'RDW',
+            NEUTROPHILS: 'Neutrophils',
+            LYMPHOCYTES: 'Lymphocytes',
+            MONOCYTES: 'Monocytes',
+            EOSINOPHILS: 'Eosinophils',
+            BASOPHILS: 'Basophils',
+          };
+          if (map[upper]) return map[upper];
+          return key
+            .replace(/_/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .replace(/\b\w/g, c => c.toUpperCase());
+        };
+
+        const addKV = (
+          out: Array<{ label: string; value: string }>,
+          labelRaw: string,
+          valueRaw: any,
+          unitRaw?: any,
+        ) => {
+          const label = normalizeLabel(labelRaw);
+          const value = formatValue(valueRaw);
+          const unit = formatValue(unitRaw);
+          if (!label || !value) return;
+          out.push({ label, value: unit ? `${value} ${unit}` : value });
+        };
+
+        const structured: Array<{ label: string; value: string }> = [];
+
+        const maybeCollectFromObject = (obj: any) => {
+          if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return;
+          const keys = [
+            'wbc',
+            'rbc',
+            'hgb',
+            'hemoglobin',
+            'hct',
+            'hematocrit',
+            'plt',
+            'platelet',
+            'platelets',
+            'mcv',
+            'mch',
+            'mchc',
+            'rdw',
+            'neutrophils',
+            'lymphocytes',
+            'monocytes',
+            'eosinophils',
+            'basophils',
+          ];
+          for (const k of keys) {
+            const v = (obj as any)?.[k];
+            const unit =
+              (obj as any)?.[`${k}_unit`] ?? (obj as any)?.[`${k}Unit`];
+            addKV(structured, k, v, unit);
+          }
+        };
+
+        const maybeCollectFromArray = (arr: any[]) => {
+          for (const it of arr) {
+            if (!it) continue;
+            const name = it?.name ?? it?.test ?? it?.label ?? it?.parameter;
+            const value = it?.value ?? it?.result ?? it?.count;
+            const unit = it?.unit ?? it?.units;
+            if (name != null && value != null) {
+              addKV(structured, String(name), value, unit);
+            }
+          }
+        };
+
+        maybeCollectFromObject(r);
+        maybeCollectFromObject(r?.cbc);
+        maybeCollectFromObject(r?.results);
+        maybeCollectFromObject(r?.values);
+        maybeCollectFromObject(r?.measurements);
+        if (Array.isArray(r?.results)) maybeCollectFromArray(r.results);
+        if (Array.isArray(r?.values)) maybeCollectFromArray(r.values);
+
+        const notesRaw =
+          r?.notes || r?.remarks || r?.description || r?.comment || r?.comments;
+        const resultRaw = r?.result || r?.findings || r?.outcome;
+        let notes = notesRaw != null ? String(notesRaw) : '';
+        let result = resultRaw != null ? String(resultRaw) : '';
+
+        if (!structured.length && typeof resultRaw === 'string') {
+          const s = resultRaw.trim();
+          if (
+            (s.startsWith('{') && s.endsWith('}')) ||
+            (s.startsWith('[') && s.endsWith(']'))
+          ) {
+            try {
+              const parsed = JSON.parse(s);
+              if (Array.isArray(parsed)) maybeCollectFromArray(parsed);
+              else maybeCollectFromObject(parsed);
+            } catch {}
+          }
+        }
+
+        const structuredText = structured.length
+          ? structured
+              .reduce((acc: Array<{ label: string; value: string }>, cur) => {
+                const exists = acc.some(
+                  it =>
+                    it.label.toLowerCase() === cur.label.toLowerCase() &&
+                    it.value.toLowerCase() === cur.value.toLowerCase(),
+                );
+                if (!exists) acc.push(cur);
+                return acc;
+              }, [])
+              .map(it => `${it.label}: ${it.value}`)
+              .join('\n')
+          : '';
+
+        if (structuredText) {
+          const combined = [structuredText, result, notes]
+            .map(v => String(v || '').trim())
+            .filter(Boolean)
+            .join('\n');
+          return combined.trim() ? combined : undefined;
+        }
+
+        notes = notes.trim();
+        result = result.trim();
+        if (result && notes) {
+          const normNotes = notes.trim();
+          const normResult = result.trim();
+          if (normNotes && normResult && normNotes !== normResult) {
+            return `${normResult}\n${normNotes}`;
+          }
+          return normResult || normNotes;
+        }
+        return (result || notes).trim() ? String(result || notes) : undefined;
+      };
       const nameMatches = (pRaw: string, meRaw: string) => {
         const p = String(pRaw || '')
           .toLowerCase()
@@ -166,13 +410,19 @@ const PatientRecords = () => {
         return false;
       };
 
-      const [resPR, resLab] = await Promise.all([
+      const [resPR, labData] = await Promise.all([
         fetch(`${API_BASE}/api/patient-records/all`, { headers }),
-        fetch(`${API_BASE}/api/lab-records`, { headers }),
+        fetchFirstOk([
+          '/api/lab-tests',
+          '/api/lab_tests',
+          '/api/lab-tests/all',
+          '/api/lab_tests/all',
+          '/api/lab-records',
+        ]),
       ]);
 
       const prRows = resPR.ok ? await resPR.json() : [];
-      const labRows = resLab.ok ? await resLab.json() : [];
+      const labRows = normalizeRows(labData);
       // Also fetch prescriptions so completed (accepted) ones appear in records
       let rxRows: any[] = [];
       try {
@@ -192,8 +442,15 @@ const PatientRecords = () => {
       const minePR = (Array.isArray(prRows) ? prRows : []).filter((r: any) =>
         nameMatches(String(r?.patient || ''), String(myName || '')),
       );
-      const mineLab = (Array.isArray(labRows) ? labRows : []).filter((r: any) =>
-        nameMatches(String(r?.patient || ''), String(myName || '')),
+      const mineLab = (Array.isArray(labRows) ? labRows : []).filter(
+        (r: any) => {
+          const pname =
+            r?.patient ||
+            r?.patient_name ||
+            r?.patientName ||
+            r?.patient_fullname;
+          return nameMatches(String(pname || ''), String(myName || ''));
+        },
       );
       const mineRx = (Array.isArray(rxRows) ? rxRows : []).filter((r: any) =>
         nameMatches(String(r?.patient_name || ''), String(myName || '')),
@@ -221,17 +478,25 @@ const PatientRecords = () => {
           date,
           doctor,
           status: 'completed',
+          notes:
+            r?.instructions || r?.instruction || r?.notes || r?.remarks
+              ? String(
+                  r?.instructions || r?.instruction || r?.notes || r?.remarks,
+                )
+              : undefined,
         };
       });
 
       const mappedLab: MedicalRecord[] = mineLab.map((r: any) => {
-        const title = r?.test_name
-          ? `Lab Result - ${String(r.test_name)}`
+        const testName =
+          r?.test_name || r?.testName || r?.test || r?.lab_test || r?.labTest;
+        const title = testName
+          ? `Lab Result - ${String(testName)}`
           : 'Lab Result';
-        const date = String(r?.date || r?.createdAt || '');
+        const date = String(r?.date || r?.createdAt || r?.created_at || '');
         const statRaw = String(r?.status || '').toLowerCase();
         const status: 'pending' | 'completed' | 'cancelled' | undefined =
-          statRaw === 'completed'
+          statRaw === 'completed' || statRaw === 'done'
             ? 'completed'
             : statRaw === 'pending'
             ? 'pending'
@@ -245,6 +510,7 @@ const PatientRecords = () => {
           date,
           doctor: undefined,
           status,
+          notes: buildLabNotes(r),
         };
       });
 
@@ -256,13 +522,15 @@ const PatientRecords = () => {
           const date = String(r?.created_at || r?.createdAt || '');
           const rawStatus = String(r?.status || '').toLowerCase();
           const status: 'pending' | 'completed' | 'cancelled' | undefined =
-            rawStatus === 'accepted'
+            rawStatus === 'accepted' ||
+            rawStatus === 'dispensed' ||
+            rawStatus === 'completed'
               ? 'completed'
               : rawStatus === 'pending'
               ? 'pending'
               : rawStatus === 'cancelled' || rawStatus === 'rejected'
               ? 'cancelled'
-              : undefined;
+              : 'pending';
           return {
             id: `RX-${String(r?.id || `${r?.patient_name || ''}-${date}`)}`,
             title: r?.medicine
@@ -272,6 +540,12 @@ const PatientRecords = () => {
             date,
             doctor: r?.doctor_name ? String(r.doctor_name) : undefined,
             status,
+            notes:
+              r?.instructions || r?.instruction || r?.notes || r?.remarks
+                ? String(
+                    r?.instructions || r?.instruction || r?.notes || r?.remarks,
+                  )
+                : undefined,
           } as MedicalRecord;
         });
 
@@ -288,6 +562,10 @@ const PatientRecords = () => {
           date,
           doctor: doctor ? String(doctor) : undefined,
           status: 'completed',
+          notes:
+            a?.notes || a?.reason || a?.complaint
+              ? String(a?.notes || a?.reason || a?.complaint)
+              : undefined,
         } as MedicalRecord;
       });
 
@@ -305,8 +583,9 @@ const PatientRecords = () => {
     React.useCallback(() => {
       loadRecords();
       loadUserData();
+      syncUnread();
       return () => {};
-    }, [loadRecords, loadUserData]),
+    }, [loadRecords, loadUserData, syncUnread]),
   );
 
   const onRefresh = React.useCallback(async () => {
@@ -344,6 +623,17 @@ const PatientRecords = () => {
         return '📋';
       default:
         return '📄';
+    }
+  };
+
+  const getRecordIconSource = (type: string) => {
+    switch (type) {
+      case 'prescription':
+        return require('../../assets/medicine_emoji.png');
+      case 'consultation':
+        return require('../../assets/consultation_emoji.png');
+      default:
+        return undefined;
     }
   };
 
@@ -391,98 +681,127 @@ const PatientRecords = () => {
         setSelectedRecord(item);
         setIsModalVisible(true);
       }}
+      activeOpacity={0.7}
     >
-      <View style={styles.recordIcon}>
-        {item.type === 'consultation' ? (
-          <Image
-            source={require('../../assets/records.png')}
-            style={styles.recordIconImg}
-            resizeMode="contain"
-          />
-        ) : (
-          <Text style={styles.recordIconText}>{getRecordIcon(item.type)}</Text>
-        )}
-      </View>
-      <View style={styles.recordDetails}>
-        <Text style={styles.recordTitle}>{item.title}</Text>
-        <Text style={styles.recordDate}>{formatDate(item.date)}</Text>
-        {item.doctor && <Text style={styles.recordDoctor}>{item.doctor}</Text>}
-      </View>
-      {item.status && (
+      <View style={styles.recordIconContainer}>
         <View
           style={[
-            styles.statusBadge,
-            item.status === 'completed' && styles.statusCompleted,
-            item.status === 'pending' && styles.statusPending,
-            item.status === 'cancelled' && styles.statusCancelled,
+            styles.recordIcon,
+            item.type === 'prescription' && styles.prescriptionIcon,
+            item.type === 'lab_result' && styles.labIcon,
+            item.type === 'consultation' && styles.consultationIcon,
           ]}
         >
-          <Text style={styles.statusText}>
-            {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+          <Text style={styles.recordIconText}>
+            {item.type === 'prescription'
+              ? '💊'
+              : item.type === 'lab_result'
+              ? '🔬'
+              : item.type === 'consultation'
+              ? '📋'
+              : '📄'}
           </Text>
         </View>
-      )}
+      </View>
+
+      <View style={styles.recordContent}>
+        <View style={styles.recordHeader}>
+          <Text style={styles.recordTitle} numberOfLines={1}>
+            {item.title}
+          </Text>
+        </View>
+
+        <View style={styles.recordDetails}>
+          <Text style={styles.recordDate}>{formatDate(item.date)}</Text>
+          {item.doctor && (
+            <Text style={styles.recordDoctor}>Dr. {item.doctor}</Text>
+          )}
+        </View>
+      </View>
     </TouchableOpacity>
   );
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <View style={[styles.topHeader, { paddingTop: insets.top }]}>
-        <Image
-          source={require('../../assets/appicon.png')}
-          style={styles.topHeaderLogo}
-          resizeMode="contain"
-        />
-        <View style={styles.topHeaderIcons}>
-          <TouchableOpacity
-            style={styles.iconBtn}
-            onPress={() => navigation.navigate('PatientNotification')}
-          >
-            <View style={{ position: 'relative' }}>
+      <View style={styles.container}>
+        <View style={[styles.headerContainer, { paddingTop: insets.top }]}>
+          <Image
+            source={require('../../assets/appicon.png')}
+            style={styles.headerLogo}
+            resizeMode="contain"
+          />
+          <View style={styles.headerActions}>
+            <TouchableOpacity
+              style={styles.headerIconBtn}
+              onPress={() => navigation.navigate('PatientNotification')}
+              activeOpacity={0.8}
+            >
+              <View style={{ position: 'relative' }}>
+                <Image
+                  source={require('../../assets/notification_icon.png')}
+                  style={styles.headerIconImg}
+                  resizeMode="contain"
+                />
+                {unreadCount > 0 && (
+                  <View
+                    style={{
+                      position: 'absolute',
+                      right: -6,
+                      top: -6,
+                      minWidth: 14,
+                      height: 14,
+                      paddingHorizontal: 3,
+                      borderRadius: 7,
+                      backgroundColor: '#EF4444',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: '#FFFFFF',
+                        fontSize: 9,
+                        fontWeight: '700',
+                      }}
+                    >
+                      {unreadCount > 99 ? '99+' : String(unreadCount)}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.headerProfileBtn}
+              onPress={() => setShowProfileMenu(true)}
+              activeOpacity={0.85}
+            >
+              <View style={styles.headerProfileAvatar}>
+                <Text style={styles.headerProfileAvatarText}>
+                  {String(userName || 'P')
+                    .charAt(0)
+                    .toUpperCase()}
+                </Text>
+              </View>
+              <View style={styles.headerProfileTextCol}>
+                <Text style={styles.headerProfileName} numberOfLines={1}>
+                  {String(userName || 'Patient')}
+                </Text>
+                <Text style={styles.headerProfileRole} numberOfLines={1}>
+                  {String(userRole || 'Patient')}
+                </Text>
+              </View>
               <Image
-                source={require('../../assets/notification_icon.png')}
-                style={styles.topHeaderIconImg}
+                source={require('../../assets/dropdown.png')}
+                style={styles.headerProfileChevron}
                 resizeMode="contain"
               />
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.topProfileBtn}
-            onPress={() => setShowProfileMenu(true)}
-            activeOpacity={0.8}
-          >
-            <View style={styles.topProfileAvatar}>
-              <Text style={styles.topProfileAvatarText}>
-                {String(userName || 'P')
-                  .charAt(0)
-                  .toUpperCase()}
-              </Text>
-            </View>
-            <View style={styles.topProfileTextCol}>
-              <Text style={styles.topProfileName} numberOfLines={1}>
-                {String(userName || 'Patient')}
-              </Text>
-              <Text style={styles.topProfileRole} numberOfLines={1}>
-                {String(userRole || 'Patient')}
-              </Text>
-            </View>
-            <Image
-              source={require('../../assets/dropdown.png')}
-              style={styles.topProfileChevron}
-              resizeMode="contain"
-            />
-          </TouchableOpacity>
-        </View>
-      </View>
-      <View style={styles.topDivider} />
-      <View style={styles.container}>
-        <View style={styles.headerContainer}>
-          <Text style={styles.header}>My Medical Records</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
-        {/* Search Bar + Filter Dropdown */}
         <View style={styles.searchRow}>
-          <View style={[styles.searchContainer, { flex: 1, margin: 0 }]}>
+          <View style={[styles.searchContainer, { margin: 0 }]}>
             <TextInput
               style={styles.searchInput}
               placeholder="Search records..."
@@ -495,53 +814,47 @@ const PatientRecords = () => {
               style={styles.searchIcon}
             />
           </View>
-          <TouchableOpacity
-            style={styles.filterButton}
-            onPress={() => setFilterMenuVisible(true)}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.filterButtonText}>
-              {getFilterLabel(activeFilter)} ▾
-            </Text>
-          </TouchableOpacity>
         </View>
 
-        {/* Filter Dropdown Modal */}
-        <Modal
-          visible={filterMenuVisible}
-          transparent
-          animationType="fade"
-          onRequestClose={() => setFilterMenuVisible(false)}
-        >
-          <TouchableOpacity
-            style={styles.filterMenuOverlay}
-            activeOpacity={1}
-            onPress={() => setFilterMenuVisible(false)}
+        {/* Filter Tabs */}
+        <View style={styles.filterScrollWrap}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.filterScroll}
+            contentContainerStyle={styles.filterContainer}
           >
-            <View style={styles.filterMenuContainer}>
-              {(
-                [
-                  { label: 'All', value: 'all' },
-                  { label: 'Prescriptions', value: 'prescriptions' },
-                  { label: 'Lab Results', value: 'lab_results' },
-                  { label: 'Consultations', value: 'consultations' },
-                  { label: 'Other', value: 'other' },
-                ] as { label: string; value: RecordType }[]
-              ).map(opt => (
-                <TouchableOpacity
-                  key={opt.value}
-                  style={styles.filterMenuItem}
-                  onPress={() => {
-                    setActiveFilter(opt.value);
-                    setFilterMenuVisible(false);
-                  }}
+            {(
+              [
+                'all',
+                'prescriptions',
+                'lab_results',
+                'consultations',
+              ] as RecordType[]
+            ).map(filter => (
+              <TouchableOpacity
+                key={filter}
+                style={[
+                  styles.filterTab,
+                  activeFilter === filter && styles.activeFilterTab,
+                ]}
+                onPress={() => setActiveFilter(filter)}
+                activeOpacity={0.7}
+              >
+                <Text
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                  style={[
+                    styles.filterText,
+                    activeFilter === filter && styles.activeFilterText,
+                  ]}
                 >
-                  <Text style={styles.filterMenuItemText}>{opt.label}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </TouchableOpacity>
-        </Modal>
+                  {getFilterLabel(filter)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
 
         {/* Records List */}
         <FlatList
@@ -566,73 +879,95 @@ const PatientRecords = () => {
         onRequestClose={() => setIsModalVisible(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              {selectedRecord?.type === 'consultation' ? (
-                <Image
-                  source={require('../../assets/records.png')}
-                  style={styles.modalIconImg}
-                  resizeMode="contain"
-                />
-              ) : (
-                <Text style={styles.modalIcon}>
-                  {selectedRecord ? getRecordIcon(selectedRecord.type) : ''}
-                </Text>
-              )}
-              <Text style={styles.modalTitle} numberOfLines={2}>
-                {selectedRecord?.title || ''}
-              </Text>
-            </View>
+          <View style={styles.detailsModalCard}>
+            <View style={styles.detailsTopAccent} />
 
-            <View style={styles.modalRow}>
-              <Text style={styles.modalLabel}>Type</Text>
-              <Text style={styles.modalValue}>
+            <View style={styles.detailsHeaderRow}>
+              <Text style={styles.detailsHeaderTitle}>
                 {selectedRecord ? getTypeLabel(selectedRecord.type) : ''}
               </Text>
             </View>
 
-            <View style={styles.modalRow}>
-              <Text style={styles.modalLabel}>Date</Text>
-              <Text style={styles.modalValue}>
-                {selectedRecord ? formatDate(selectedRecord.date) : ''}
+            <View style={styles.detailsDivider} />
+
+            <View style={styles.detailsRow}>
+              <View style={styles.detailsIconBox}>
+                <Text style={styles.detailsIconText}>
+                  {selectedRecord?.type === 'prescription'
+                    ? '💊'
+                    : selectedRecord?.type === 'lab_result'
+                    ? '🔬'
+                    : selectedRecord?.type === 'consultation'
+                    ? '📋'
+                    : '📄'}
+                </Text>
+              </View>
+              <View style={styles.detailsTextCol}>
+                <Text style={styles.detailsLabel}>
+                  {selectedRecord?.type === 'prescription'
+                    ? 'Medicine'
+                    : selectedRecord?.type === 'lab_result'
+                    ? 'Test'
+                    : 'Record'}
+                </Text>
+                <Text style={styles.detailsValue} numberOfLines={2}>
+                  {selectedRecord
+                    ? String(selectedRecord.title || '')
+                        .replace(/^Prescription\s*-\s*/i, '')
+                        .replace(/^Lab Result\s*-\s*/i, '')
+                        .replace(/^Consultation\s*-\s*/i, '')
+                    : ''}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.detailsRow}>
+              <View style={styles.detailsIconBox}>
+                <Text style={styles.detailsIconText}>📅</Text>
+              </View>
+              <View style={styles.detailsTextCol}>
+                <Text style={styles.detailsLabel}>Date</Text>
+                <Text style={styles.detailsValue}>
+                  {selectedRecord ? formatDate(selectedRecord.date) : ''}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.detailsRow}>
+              <View style={styles.detailsIconBox}>
+                <Text style={styles.detailsIconText}>👤</Text>
+              </View>
+              <View style={styles.detailsTextCol}>
+                <Text style={styles.detailsLabel}>Doctor</Text>
+                <Text style={styles.detailsValue}>
+                  {selectedRecord?.doctor ? String(selectedRecord.doctor) : '—'}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.detailsDivider} />
+
+            <Text style={styles.detailsSectionTitle}>
+              {selectedRecord?.type === 'lab_result'
+                ? 'Result / Notes'
+                : 'Instructions'}
+            </Text>
+            <View style={styles.detailsInstructionsBox}>
+              <Text style={styles.detailsInstructionsText}>
+                {selectedRecord?.notes
+                  ? String(selectedRecord.notes)
+                  : selectedRecord?.type === 'lab_result'
+                  ? 'No result available.'
+                  : 'No instructions available.'}
               </Text>
             </View>
 
-            {selectedRecord?.doctor ? (
-              <View style={styles.modalRow}>
-                <Text style={styles.modalLabel}>Doctor</Text>
-                <Text style={styles.modalValue}>{selectedRecord.doctor}</Text>
-              </View>
-            ) : null}
-
-            <View style={[styles.modalRow, { alignItems: 'center' }]}>
-              <Text style={styles.modalLabel}>Status</Text>
-              {selectedRecord?.status ? (
-                <View
-                  style={[
-                    styles.statusBadge,
-                    selectedRecord.status === 'completed' &&
-                      styles.statusCompleted,
-                    selectedRecord.status === 'pending' && styles.statusPending,
-                    selectedRecord.status === 'cancelled' &&
-                      styles.statusCancelled,
-                  ]}
-                >
-                  <Text style={styles.statusText}>
-                    {selectedRecord.status.charAt(0).toUpperCase() +
-                      selectedRecord.status.slice(1)}
-                  </Text>
-                </View>
-              ) : (
-                <Text style={styles.modalValue}>N/A</Text>
-              )}
-            </View>
-
             <TouchableOpacity
-              style={styles.modalCloseButton}
+              style={styles.detailsCloseButton}
               onPress={() => setIsModalVisible(false)}
+              activeOpacity={0.85}
             >
-              <Text style={styles.modalCloseText}>Close</Text>
+              <Text style={styles.detailsCloseText}>Close</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -721,86 +1056,39 @@ const PatientRecords = () => {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F3F4F6',
   },
-  topHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#FFFFFF',
-    marginTop: 8,
-  },
-  topHeaderLogo: { width: 40, height: 40 },
-  topHeaderIcons: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  iconBtn: { padding: 8 },
-  topHeaderIconImg: { width: 20, height: 20, tintColor: '#10B981' },
-  topProfileBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 0,
-    paddingHorizontal: 0,
-    borderRadius: 0,
-    backgroundColor: 'transparent',
-  },
-  topProfileAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#10B981',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  topProfileAvatarText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  topProfileTextCol: {
-    marginLeft: 12,
-    marginRight: 10,
-    maxWidth: 160,
-  },
-  topProfileName: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#111827',
-  },
-  topProfileRole: {
-    fontSize: 12,
-    color: '#6B7280',
-    marginTop: 2,
-  },
-  topProfileChevron: {
-    width: 14,
-    height: 14,
-    tintColor: '#111827',
-  },
-  topDivider: { height: 1, backgroundColor: '#E5E7EB' },
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    padding: 16,
+    backgroundColor: '#F3F4F6',
   },
   headerContainer: {
-    padding: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
   },
   header: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#111827',
-    marginTop: 0,
+    color: '#2d3748',
+  },
+  headerLogo: {
+    width: 40,
+    height: 40,
+  },
+  searchRow: {
+    marginBottom: 10,
   },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     margin: 16,
-    backgroundColor: '#f3f4f6',
-    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     paddingHorizontal: 16,
   },
   searchInput: {
@@ -814,139 +1102,168 @@ const styles = StyleSheet.create({
     height: 20,
     tintColor: '#9CA3AF',
   },
-  // Search + Dropdown Row
-  searchRow: {
+  headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    marginTop: 12,
-    marginBottom: 4,
+    gap: 12,
   },
-  filterButton: {
-    marginLeft: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 8,
+  headerIconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    minWidth: 140,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerIconImg: { width: 20, height: 20, tintColor: '#111827' },
+  headerProfileBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
   },
-  filterButtonText: {
+  headerProfileAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#10B981',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerProfileAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  headerProfileTextCol: {
+    marginLeft: 10,
+    marginRight: 8,
+    maxWidth: 140,
+  },
+  headerProfileName: {
+    color: '#111827',
+    fontWeight: '800',
     fontSize: 14,
-    color: '#374151',
+  },
+  headerProfileRole: {
+    marginTop: 2,
+    color: '#6B7280',
     fontWeight: '600',
+    fontSize: 12,
+  },
+  headerProfileChevron: {
+    width: 14,
+    height: 14,
+    tintColor: '#111827',
+    opacity: 0.9,
   },
   filterContainer: {
-    paddingHorizontal: 16,
-    paddingBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 2,
+    gap: 8,
+  },
+  filterScrollWrap: {
+    paddingVertical: 12,
+    minHeight: 60,
+    justifyContent: 'center',
+  },
+  filterScroll: {
+    flexGrow: 0,
   },
   filterTab: {
     paddingHorizontal: 16,
     paddingVertical: 8,
-    marginRight: 8,
+    minHeight: 36,
     borderRadius: 20,
-    backgroundColor: '#f3f4f6',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    justifyContent: 'center',
   },
   activeFilterTab: {
     backgroundColor: '#10B981',
+    borderColor: '#10B981',
   },
   filterText: {
-    color: '#6B7280',
+    fontSize: 14,
     fontWeight: '500',
+    color: '#6B7280',
   },
   activeFilterText: {
-    color: '#fff',
-  },
-  // Dropdown Menu Styles
-  filterMenuOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.0)',
-    justifyContent: 'flex-start',
-    alignItems: 'flex-end',
-  },
-  filterMenuContainer: {
-    marginTop: 140,
-    marginRight: 16,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 3,
-    overflow: 'hidden',
-    minWidth: 140,
-  },
-  filterMenuItem: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  filterMenuItemText: {
-    fontSize: 14,
-    color: '#111827',
+    color: '#FFFFFF',
   },
   recordsList: {
-    padding: 16,
+    padding: 0,
     paddingBottom: 80, // Space for bottom navigation
   },
   recordCard: {
     flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
     padding: 16,
     marginBottom: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
+  },
+  recordIconContainer: {
+    marginRight: 16,
   },
   recordIcon: {
     width: 48,
     height: 48,
     borderRadius: 12,
-    backgroundColor: '#ECFDF5',
+    backgroundColor: '#F3F4F6',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 16,
+  },
+  prescriptionIcon: {
+    backgroundColor: '#ECFDF5',
+  },
+  labIcon: {
+    backgroundColor: '#FEF3C7',
+  },
+  consultationIcon: {
+    backgroundColor: '#DBEAFE',
   },
   recordIconText: {
-    fontSize: 20,
+    fontSize: 24,
   },
-  recordIconImg: {
-    width: 22,
-    height: 22,
-    tintColor: '#10B981',
-  },
-  recordDetails: {
+  recordContent: {
     flex: 1,
+  },
+  recordHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 8,
   },
   recordTitle: {
     fontSize: 16,
     fontWeight: '600',
     color: '#111827',
-    marginBottom: 4,
+    flex: 1,
+    marginRight: 12,
+  },
+  recordDetails: {
+    gap: 4,
   },
   recordDate: {
     fontSize: 14,
     color: '#6B7280',
-    marginBottom: 2,
   },
   recordDoctor: {
     fontSize: 14,
-    color: '#4B5563',
-    fontStyle: 'italic',
+    color: '#6B7280',
   },
   statusBadge: {
-    paddingHorizontal: 8,
+    paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 12,
-    marginLeft: 8,
+    borderRadius: 20,
+    alignSelf: 'flex-start',
   },
   statusCompleted: {
     backgroundColor: '#ECFDF5',
@@ -959,8 +1276,17 @@ const styles = StyleSheet.create({
   },
   statusText: {
     fontSize: 12,
-    fontWeight: '500',
-    color: '#065F46', // Default to completed color
+    fontWeight: '600',
+    color: '#065F46',
+  },
+  statusCompletedText: {
+    color: '#065F46',
+  },
+  statusPendingText: {
+    color: '#92400E',
+  },
+  statusCancelledText: {
+    color: '#991B1B',
   },
   emptyContainer: {
     flex: 1,
@@ -1038,6 +1364,107 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 16,
   },
+  detailsModalCard: {
+    width: '100%',
+    maxWidth: 560,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 18,
+    elevation: 6,
+  },
+  detailsTopAccent: {
+    height: 8,
+    backgroundColor: '#10B981',
+  },
+  detailsHeaderRow: {
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  detailsHeaderTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  detailsDivider: {
+    height: 1,
+    backgroundColor: '#E5E7EB',
+    marginHorizontal: 18,
+  },
+  detailsRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  detailsIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  detailsIconText: {
+    fontSize: 18,
+  },
+  detailsTextCol: {
+    flex: 1,
+  },
+  detailsLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  detailsValue: {
+    marginTop: 2,
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  detailsSectionTitle: {
+    marginTop: 12,
+    marginBottom: 8,
+    paddingHorizontal: 18,
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  detailsInstructionsBox: {
+    marginHorizontal: 18,
+    backgroundColor: '#EFF6FF',
+    borderColor: '#BFDBFE',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+  },
+  detailsInstructionsText: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#1F2937',
+  },
+  detailsCloseButton: {
+    marginTop: 16,
+    marginHorizontal: 18,
+    marginBottom: 18,
+    backgroundColor: '#10B981',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  detailsCloseText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 16,
+  },
   modalCard: {
     width: '100%',
     maxWidth: 520,
@@ -1059,6 +1486,11 @@ const styles = StyleSheet.create({
     height: 22,
     marginRight: 8,
     tintColor: '#10B981',
+  },
+  modalEmojiImg: {
+    width: 22,
+    height: 22,
+    marginRight: 8,
   },
   modalTitle: {
     fontSize: 18,

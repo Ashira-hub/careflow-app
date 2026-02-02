@@ -402,9 +402,13 @@ export default function DoctorAppointment() {
 
   // Modal state for new appointment
   const [showNew, setShowNew] = useState(false);
+  const [newEntryType, setNewEntryType] = useState<'appointment' | 'schedule'>(
+    'appointment',
+  );
   const [patient, setPatient] = useState('');
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
+  const [endTime, setEndTime] = useState('');
   const [notes, setNotes] = useState('');
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
@@ -428,6 +432,9 @@ export default function DoctorAppointment() {
     }>
   >([]);
   const [pickerTarget, setPickerTarget] = useState<'new' | 'detail'>('new');
+  const [timePickerField, setTimePickerField] = useState<'start' | 'end'>(
+    'start',
+  );
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -452,6 +459,8 @@ export default function DoctorAppointment() {
   const [dTime, setDTime] = useState('');
   const [dNotes, setDNotes] = useState('');
 
+  const [showAllList, setShowAllList] = useState(false);
+
   const monthAbbr = (m: number) =>
     [
       'JAN',
@@ -473,12 +482,87 @@ export default function DoctorAppointment() {
     return new Date(y, m - 1, d);
   };
 
+  const pad2 = (n: number) => String(Math.floor(n)).padStart(2, '0');
+  const formatYmd = (dt: Date) =>
+    `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+  const minutesToTime12 = (mins: number) => {
+    const h24 = Math.floor(mins / 60);
+    const m = mins % 60;
+    const period = h24 >= 12 ? 'PM' : 'AM';
+    const h12 = h24 % 12 || 12;
+    return `${pad2(h12)}:${pad2(m)} ${period}`;
+  };
+
+  const time12ToMinutes = (t: string) => {
+    try {
+      const raw = String(t || '').trim();
+      if (!raw) return null;
+      const [hhmm, apRaw] = raw.split(' ');
+      const [hhStr, mmStr] = String(hhmm || '').split(':');
+      const hh = Number(hhStr);
+      const mm = Number(mmStr);
+      if (!isFinite(hh) || !isFinite(mm)) return null;
+      const ap = String(apRaw || '').toUpperCase();
+      const h24 = (hh % 12) + (ap === 'PM' ? 12 : 0);
+      return h24 * 60 + mm;
+    } catch {
+      return null;
+    }
+  };
+
+  const minutesToTimeCompact = (mins: number) => {
+    const h24 = Math.floor(mins / 60);
+    const m = mins % 60;
+    const ap = h24 >= 12 ? 'pm' : 'am';
+    const h12 = h24 % 12 || 12;
+    return `${h12}:${pad2(m)}${ap}`;
+  };
+
+  const getTimeRangeLabel = (startTime: string) => {
+    const startMins = time12ToMinutes(startTime);
+    if (startMins == null) return String(startTime || '');
+    const endMins = startMins + 30;
+    return `${minutesToTimeCompact(startMins)} - ${minutesToTimeCompact(
+      endMins,
+    )}`;
+  };
+
   const resetForm = () => {
+    setNewEntryType('appointment');
     setPatient('');
     setDate('');
     setTime('');
+    setEndTime('');
     setNotes('');
   };
+
+  const validateFutureDateTime = React.useCallback(
+    (ymd: string, tm: string): string | null => {
+      if (!ymd) return 'Please select a date.';
+      if (!tm) return 'Please select a time.';
+      const dt = parseYmd(ymd);
+      if (!dt) return 'Invalid date format.';
+      const now = new Date();
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      if (dt < start) return 'Please pick today or a future date.';
+      if (
+        dt.getFullYear() === now.getFullYear() &&
+        dt.getMonth() === now.getMonth() &&
+        dt.getDate() === now.getDate()
+      ) {
+        const [hhmm, ap] = String(tm || '').split(' ');
+        const [hh, mm] = (hhmm || '').split(':').map(v => Number(v));
+        if (isFinite(hh) && isFinite(mm)) {
+          const sel24 = (hh % 12) + (ap?.toUpperCase() === 'PM' ? 12 : 0);
+          const selMinutes = sel24 * 60 + mm;
+          const nowMinutes = now.getHours() * 60 + now.getMinutes();
+          if (selMinutes <= nowMinutes) return 'Please select a future time.';
+        }
+      }
+      return null;
+    },
+    [],
+  );
 
   const getAuthHeaders = React.useCallback(async () => {
     try {
@@ -489,8 +573,14 @@ export default function DoctorAppointment() {
       >;
       if (!raw) return base;
       const sess = JSON.parse(raw);
-      const token = sess?.token || sess?.user?.token || sess?.accessToken;
-      const userId = sess?.user?.id || sess?.id;
+      const token =
+        sess?.token ||
+        sess?.accessToken ||
+        sess?.access_token ||
+        sess?.user?.token ||
+        sess?.user?.accessToken ||
+        sess?.user?.access_token;
+      const userId = sess?.user?.id || sess?.id || sess?.user_id;
       const withAuth = token
         ? { ...base, Authorization: `Bearer ${token}` }
         : base;
@@ -500,7 +590,147 @@ export default function DoctorAppointment() {
     }
   }, []);
 
-  // Parse appointment date (YYYY-MM-DD) and time (HH:MM AM/PM) into a Date
+  const getCurrentUserId = React.useCallback(async (): Promise<
+    string | number | undefined
+  > => {
+    try {
+      const raw = await AsyncStorage.getItem('session');
+      if (!raw) return undefined;
+      const sess = JSON.parse(raw);
+      return sess?.user?.id ?? sess?.id ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }, []);
+
+  const getCurrentUserName = React.useCallback(async (): Promise<
+    string | undefined
+  > => {
+    try {
+      const raw = await AsyncStorage.getItem('session');
+      if (!raw) return undefined;
+      const sess = JSON.parse(raw);
+      return (
+        sess?.user?.full_name ||
+        sess?.user?.fullName ||
+        sess?.user?.name ||
+        sess?.full_name ||
+        sess?.name
+      );
+    } catch {
+      return undefined;
+    }
+  }, []);
+
+  const getCurrentUserSpecialty = React.useCallback(async (): Promise<
+    string | undefined
+  > => {
+    try {
+      const raw = await AsyncStorage.getItem('session');
+      if (!raw) return undefined;
+      const sess = JSON.parse(raw);
+      const v = sess?.user?.specialty ?? sess?.specialty;
+      return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+    } catch {
+      return undefined;
+    }
+  }, []);
+
+  const loadAppointments = React.useCallback(async () => {
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`${API_BASE}/api/appointments`, { headers });
+      if (!res.ok) return;
+      const arr = await res.json();
+      if (Array.isArray(arr)) {
+        setAppointments(
+          arr
+            .filter((a: any) => !a.done)
+            .filter((a: any) => {
+              const patient = String(a?.patient || '')
+                .trim()
+                .toLowerCase();
+              const status = String(a?.status || '')
+                .trim()
+                .toLowerCase();
+              const isSchedule =
+                a?.is_schedule === true || a?.isSchedule === true;
+              if (isSchedule) return false;
+              if (status === 'available' || status === 'schedule') return false;
+              if (!patient) return false;
+              if (patient === 'available slot' || patient === 'available')
+                return false;
+              return true;
+            })
+            .filter((a: any) => {
+              const d = String(a?.date || '').trim();
+              const t = String(a?.time || '').trim();
+              // Hide past date/time appointments
+              return validateFutureDateTime(d, t) == null;
+            })
+            .map((a: any) => ({
+              id: a.id,
+              patient: a.patient,
+              date: a.date,
+              time: a.time,
+              notes: a.notes,
+              done: a.done,
+            })),
+        );
+      }
+    } catch {}
+  }, [getAuthHeaders, validateFutureDateTime]);
+
+  const visibleAppointments = React.useMemo(() => {
+    const parseDt = (ymd: string, tm: string): Date | null => {
+      try {
+        const [y, m, d] = String(ymd || '')
+          .split('-')
+          .map(Number);
+        const [hhmm, ap] = String(tm || '').split(' ');
+        const [hhStr, mmStr] = String(hhmm || '').split(':');
+        const hh = Number(hhStr);
+        const mm = Number(mmStr);
+        if (!y || !m || !d || !isFinite(hh) || !isFinite(mm)) return null;
+        const h24 = (hh % 12) + (String(ap).toUpperCase() === 'PM' ? 12 : 0);
+        return new Date(y, m - 1, d, h24, mm, 0, 0);
+      } catch {
+        return null;
+      }
+    };
+
+    const now = Date.now();
+    const withIdx = (appointments || [])
+      .map((a, idx) => ({ a, idx }))
+      .map(x => ({
+        ...x,
+        dt: parseDt(String(x.a.date || ''), String(x.a.time || '')),
+      }))
+      .filter(x => {
+        const patient = String(x.a?.patient || '')
+          .trim()
+          .toLowerCase();
+        if (!patient) return false;
+        if (patient === 'available slot' || patient === 'available')
+          return false;
+        return Boolean(x.dt && x.dt.getTime() > now);
+      });
+
+    withIdx.sort((x, y) => (x.dt!.getTime() || 0) - (y.dt!.getTime() || 0));
+    const total = withIdx.length;
+    const sliced = showAllList ? withIdx : withIdx.slice(0, 10);
+    return { list: sliced, total };
+  }, [appointments, showAllList]);
+
+  const bookedDateSet = React.useMemo(() => {
+    const s = new Set<string>();
+    for (const a of appointments || []) {
+      const d = String((a as any)?.date || '').trim();
+      if (d) s.add(d);
+    }
+    return s;
+  }, [appointments]);
+
   const parseApptDateTime = React.useCallback(
     (ymd: string, tm: string): Date | null => {
       try {
@@ -520,7 +750,6 @@ export default function DoctorAppointment() {
     [],
   );
 
-  // Store reminders: day-before and 30-min-before
   const setReminderForAppointment = React.useCallback(
     async (
       a: {
@@ -632,7 +861,6 @@ export default function DoctorAppointment() {
     [parseApptDateTime],
   );
 
-  // Check due reminders, enqueue notifications, and mark reminders fired
   const checkDueReminders = React.useCallback(async () => {
     try {
       const raw = await AsyncStorage.getItem('doctor_reminders');
@@ -717,92 +945,109 @@ export default function DoctorAppointment() {
     } catch {}
   }, []);
 
-  const getCurrentUserName = React.useCallback(async (): Promise<
-    string | undefined
-  > => {
-    try {
-      const raw = await AsyncStorage.getItem('session');
-      if (!raw) return undefined;
-      const sess = JSON.parse(raw);
-      return (
-        sess?.user?.full_name ||
-        sess?.user?.fullName ||
-        sess?.user?.name ||
-        sess?.full_name ||
-        sess?.name
-      );
-    } catch {
-      return undefined;
-    }
-  }, []);
-
   const onSaveNew = async () => {
-    const pn = String(patient || '').trim();
-    if (!pn) return Alert.alert('Validation', 'Please enter a patient name.');
-    if (!date) return Alert.alert('Validation', 'Please select a date.');
-    if (!time) return Alert.alert('Validation', 'Please select a time.');
+    const isSchedule = newEntryType === 'schedule';
+    const pn = isSchedule ? 'Available Slot' : String(patient || '').trim();
+    if (!isSchedule && !pn)
+      return Alert.alert('Validation', 'Please enter a patient name.');
 
-    // Prevent saving past date/time (same logic as picker enforcement)
-    const dt = parseYmd(date);
-    if (!dt) return Alert.alert('Validation', 'Invalid date format.');
-    const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    if (dt < start)
-      return Alert.alert('Invalid date', 'Please pick today or a future date.');
-    if (
-      dt.getFullYear() === now.getFullYear() &&
-      dt.getMonth() === now.getMonth() &&
-      dt.getDate() === now.getDate()
-    ) {
-      // compare minutes
-      const [hhmm, ap] = time.split(' ');
-      const [hh, mm] = (hhmm || '').split(':').map(v => Number(v));
-      if (isFinite(hh) && isFinite(mm)) {
-        const sel24 = (hh % 12) + (ap?.toUpperCase() === 'PM' ? 12 : 0);
-        const selMinutes = sel24 * 60 + mm;
-        const nowMinutes = now.getHours() * 60 + now.getMinutes();
-        if (selMinutes <= nowMinutes)
-          return Alert.alert('Invalid time', 'Please select a future time.');
-      }
+    const d = String(date || '').trim();
+    const t = String(time || '').trim();
+    const err = validateFutureDateTime(d, t);
+    if (err) return Alert.alert('Validation', err);
+    if (isSchedule) {
+      const et = String(endTime || '').trim();
+      if (!et) return Alert.alert('Validation', 'Please select an end time.');
+      try {
+        const sm = time12ToMinutes(t);
+        const em = time12ToMinutes(et);
+        if (sm != null && em != null && em <= sm) {
+          return Alert.alert(
+            'Validation',
+            'End time must be later than start time.',
+          );
+        }
+      } catch {}
     }
 
     try {
       const headers = await getAuthHeaders();
       const createdByName = await getCurrentUserName();
-      const res = await fetch(`${API_BASE}/api/appointments`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          patient: pn,
-          date,
-          time,
-          notes,
-          done: false,
-          createdByName,
-        }),
-      });
+      const createdById = await getCurrentUserId();
+      const specialty = await getCurrentUserSpecialty();
+
+      const res = isSchedule
+        ? await fetch(`${API_BASE}/api/schedule-slots`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              date: d,
+              time: t,
+              start_time: t,
+              startTime: t,
+              end_time: String(endTime || '').trim(),
+              endTime: String(endTime || '').trim(),
+              specialty,
+              notes,
+              doctorName: createdByName,
+              doctor_name: createdByName,
+              doctor_user_id: createdById,
+              doctorUserId: createdById,
+              createdByName,
+              created_by_name: createdByName,
+            }),
+          })
+        : await fetch(`${API_BASE}/api/appointments`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              patient: pn,
+              date: d,
+              time: t,
+              specialty,
+              notes,
+              done: false,
+              status: isSchedule ? 'available' : undefined,
+              is_schedule: isSchedule ? true : undefined,
+              isSchedule: isSchedule ? true : undefined,
+              createdByName,
+              created_by_name: createdByName,
+              doctor_user_id: createdById,
+              doctorUserId: createdById,
+            }),
+          });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const created = await res.json();
-      setAppointments(prev => [
-        {
-          id: created.id,
-          patient: created.patient,
-          date: created.date,
-          time: created.time,
-          notes: created.notes,
-          done: created.done,
-        },
-        ...prev,
-      ]);
+
+      if (!isSchedule && created) {
+        setAppointments(prev => [
+          {
+            id: created.id,
+            patient: created.patient,
+            date: created.date,
+            time: created.time,
+            notes: created.notes,
+            done: created.done,
+          },
+          ...prev,
+        ]);
+      } else {
+        try {
+          await loadAppointments();
+        } catch {}
+      }
       setShowNew(false);
       resetForm();
       // Log activity: appointment created
       try {
         const rawAct = await AsyncStorage.getItem('doctor_activity');
         const arrAct = rawAct ? JSON.parse(rawAct) : [];
+        const firstCreated = created;
         const item = {
           id: String(Date.now()),
-          title: `New appointment: ${created?.patient || patient}`,
+          title: isSchedule
+            ? `New schedule slot: ${d} ${t}`
+            : `New appointment: ${firstCreated?.patient || patient}`,
           type: 'appointment',
           timestamp: Date.now(),
         };
@@ -824,54 +1069,17 @@ export default function DoctorAppointment() {
   React.useEffect(() => {
     (async () => {
       try {
-        const headers = await getAuthHeaders();
-        const res = await fetch(`${API_BASE}/api/appointments`, { headers });
-        if (!res.ok) return;
-        const arr = await res.json();
-        if (Array.isArray(arr)) {
-          setAppointments(
-            arr
-              .filter((a: any) => !a.done)
-              .map((a: any) => ({
-                id: a.id,
-                patient: a.patient,
-                date: a.date,
-                time: a.time,
-                notes: a.notes,
-                done: a.done,
-              })),
-          );
-        }
+        await loadAppointments();
       } catch {}
     })();
-  }, [getAuthHeaders]);
-
-  const loadAppointments = React.useCallback(async () => {
-    try {
-      const headers = await getAuthHeaders();
-      const res = await fetch(`${API_BASE}/api/appointments`, { headers });
-      if (!res.ok) return;
-      const arr = await res.json();
-      if (Array.isArray(arr)) {
-        setAppointments(
-          arr
-            .filter((a: any) => !a.done)
-            .map((a: any) => ({
-              id: a.id,
-              patient: a.patient,
-              date: a.date,
-              time: a.time,
-              notes: a.notes,
-              done: a.done,
-            })),
-        );
-      }
-    } catch {}
-  }, [getAuthHeaders]);
+  }, [loadAppointments]);
 
   // Also check reminders whenever this screen regains focus
   useFocusEffect(
     React.useCallback(() => {
+      try {
+        loadAppointments();
+      } catch {}
       checkDueReminders();
       (async () => {
         try {
@@ -886,7 +1094,7 @@ export default function DoctorAppointment() {
         }
       })();
       return () => {};
-    }, [checkDueReminders]),
+    }, [checkDueReminders, loadAppointments]),
   );
 
   const onRefresh = React.useCallback(async () => {
@@ -941,7 +1149,12 @@ export default function DoctorAppointment() {
           {/* Title Row */}
           <View style={styles.titleRow}>
             <Text style={styles.screenTitle}>Appointment</Text>
-            <TouchableOpacity onPress={() => setShowNew(true)}>
+            <TouchableOpacity
+              onPress={() => {
+                resetForm();
+                setShowNew(true);
+              }}
+            >
               <Text style={styles.plus}>+</Text>
             </TouchableOpacity>
           </View>
@@ -996,6 +1209,16 @@ export default function DoctorAppointment() {
                       >
                         {d ?? ''}
                       </Text>
+                      {(() => {
+                        if (d === null) return null;
+                        try {
+                          const ymd = formatYmd(new Date(year, month, d));
+                          if (!bookedDateSet.has(ymd)) return null;
+                          return <View style={styles.dayDot} />;
+                        } catch {
+                          return null;
+                        }
+                      })()}
                     </View>
                   ))}
                 </View>
@@ -1005,11 +1228,30 @@ export default function DoctorAppointment() {
 
           {/* Appointment List Card */}
           <View style={styles.listCard}>
-            <View style={styles.listHeader}>
+            <View
+              style={[
+                styles.listHeader,
+                {
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                },
+              ]}
+            >
               <Text style={styles.listTitle}>Appointment List</Text>
+              {visibleAppointments.total > 10 && (
+                <TouchableOpacity
+                  onPress={() => setShowAllList(v => !v)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.viewAllText}>
+                    {showAllList ? 'Show Less' : 'View All'}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
 
-            {appointments.length === 0 ? (
+            {visibleAppointments.total === 0 ? (
               <Text
                 style={[
                   styles.itemDesc,
@@ -1019,16 +1261,15 @@ export default function DoctorAppointment() {
                 No appointments yet.
               </Text>
             ) : (
-              appointments.map((a, idx) => {
+              visibleAppointments.list.map(({ a, idx }) => {
                 const parsed = parseYmd(a.date);
                 const mon = parsed ? monthAbbr(parsed.getMonth()) : '';
                 const day = parsed ? String(parsed.getDate()) : '';
                 const yr = parsed ? String(parsed.getFullYear()) : '';
                 return (
                   <TouchableOpacity
-                    key={`${a.date}-${a.time}-${idx}`}
+                    key={`${a.id ?? ''}-${a.date}-${a.time}-${idx}`}
                     style={styles.listItem}
-                    onPress={() => openDetail(idx)}
                     activeOpacity={0.85}
                   >
                     <View style={styles.dateCol}>
@@ -1037,17 +1278,11 @@ export default function DoctorAppointment() {
                       <Text style={styles.dateYear}>{yr}</Text>
                     </View>
                     <View style={styles.itemDescWrap}>
-                      <Text
-                        style={[
-                          styles.itemDesc,
-                          { fontWeight: '700', color: '#111827' },
-                        ]}
-                        numberOfLines={1}
-                      >
+                      <Text style={styles.itemPatient} numberOfLines={1}>
                         {a.patient}
                       </Text>
                       <Text style={styles.itemDesc} numberOfLines={2}>
-                        {a.time}
+                        {getTimeRangeLabel(a.time)}
                         {a.notes ? ` • ${a.notes}` : ''}
                       </Text>
                     </View>
@@ -1058,6 +1293,13 @@ export default function DoctorAppointment() {
                         gap: 8,
                       }}
                     >
+                      <TouchableOpacity
+                        style={styles.viewBtn}
+                        activeOpacity={0.85}
+                        onPress={() => openDetail(idx)}
+                      >
+                        <Text style={styles.viewBtnText}>View</Text>
+                      </TouchableOpacity>
                       <TouchableOpacity
                         onPress={() => {
                           setReminderTarget(a);
@@ -1227,7 +1469,11 @@ export default function DoctorAppointment() {
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalCard, { paddingTop: insets.top / 2 }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>New Appointment</Text>
+              <Text style={styles.modalTitle}>
+                {newEntryType === 'schedule'
+                  ? 'New Schedule Slot'
+                  : 'New Appointment'}
+              </Text>
               <TouchableOpacity
                 style={styles.closeBtn}
                 onPress={() => {
@@ -1239,63 +1485,198 @@ export default function DoctorAppointment() {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.formGroup}>
-              <Text style={styles.inputLabel}>Patient</Text>
-              <TextInput
-                placeholder="Enter patient name"
-                placeholderTextColor="#9CA3AF"
-                value={patient}
-                onChangeText={setPatient}
-                style={styles.input}
-              />
+            <View style={styles.entryTypeRow}>
+              <TouchableOpacity
+                style={[
+                  styles.entryTypeBtn,
+                  newEntryType === 'appointment' && styles.entryTypeBtnActive,
+                ]}
+                activeOpacity={0.85}
+                onPress={() => setNewEntryType('appointment')}
+              >
+                <Text
+                  style={[
+                    styles.entryTypeText,
+                    newEntryType === 'appointment' &&
+                      styles.entryTypeTextActive,
+                  ]}
+                >
+                  Appointment
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.entryTypeBtn,
+                  newEntryType === 'schedule' && styles.entryTypeBtnActive,
+                ]}
+                activeOpacity={0.85}
+                onPress={() => setNewEntryType('schedule')}
+              >
+                <Text
+                  style={[
+                    styles.entryTypeText,
+                    newEntryType === 'schedule' && styles.entryTypeTextActive,
+                  ]}
+                >
+                  Schedule Slot
+                </Text>
+              </TouchableOpacity>
             </View>
 
-            <View style={styles.row2}>
-              <View style={{ flex: 1, marginRight: 8 }}>
-                <Text style={styles.inputLabel}>Date</Text>
-                <View style={styles.inputWithIcon}>
-                  <TextInput
-                    placeholder="Date"
-                    placeholderTextColor="#9CA3AF"
-                    value={date}
-                    onChangeText={setDate}
-                    style={[styles.input, { paddingRight: 40 }]}
-                  />
-                  <TouchableOpacity
-                    style={styles.iconOverlay}
-                    onPress={() => setShowDatePicker(true)}
-                  >
-                    <Image
-                      source={require('../../assets/appointment_icon.png')}
-                      style={styles.inlineIcon}
-                      resizeMode="contain"
+            {newEntryType === 'appointment' && (
+              <View style={styles.formGroup}>
+                <Text style={styles.inputLabel}>Patient</Text>
+                <TextInput
+                  placeholder="Enter patient name"
+                  placeholderTextColor="#9CA3AF"
+                  value={patient}
+                  onChangeText={setPatient}
+                  style={styles.input}
+                />
+              </View>
+            )}
+
+            {newEntryType === 'schedule' ? (
+              <>
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Date</Text>
+                  <View style={styles.inputWithIcon}>
+                    <TextInput
+                      placeholder="Date"
+                      placeholderTextColor="#9CA3AF"
+                      value={date}
+                      onChangeText={setDate}
+                      style={[styles.input, { paddingRight: 40 }]}
                     />
-                  </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.iconOverlay}
+                      onPress={() => {
+                        setPickerTarget('new');
+                        setShowDatePicker(true);
+                      }}
+                    >
+                      <Image
+                        source={require('../../assets/appointment_icon.png')}
+                        style={styles.inlineIcon}
+                        resizeMode="contain"
+                      />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <View style={styles.row2}>
+                  <View style={{ flex: 1, marginRight: 8 }}>
+                    <Text style={styles.inputLabel}>Start Time</Text>
+                    <View style={styles.inputWithIcon}>
+                      <TextInput
+                        placeholder="Start Time"
+                        placeholderTextColor="#9CA3AF"
+                        value={time}
+                        onChangeText={setTime}
+                        editable={false}
+                        style={[styles.input, { paddingRight: 40 }]}
+                      />
+                      <TouchableOpacity
+                        style={styles.iconOverlay}
+                        onPress={() => {
+                          setPickerTarget('new');
+                          setTimePickerField('start');
+                          setShowTimePicker(true);
+                        }}
+                      >
+                        <Image
+                          source={require('../../assets/time_icon.png')}
+                          style={styles.inlineIcon}
+                          resizeMode="contain"
+                        />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 8 }}>
+                    <Text style={styles.inputLabel}>End Time</Text>
+                    <View style={styles.inputWithIcon}>
+                      <TextInput
+                        placeholder="End Time"
+                        placeholderTextColor="#9CA3AF"
+                        value={endTime}
+                        onChangeText={setEndTime}
+                        editable={false}
+                        style={[styles.input, { paddingRight: 40 }]}
+                      />
+                      <TouchableOpacity
+                        style={styles.iconOverlay}
+                        onPress={() => {
+                          setPickerTarget('new');
+                          setTimePickerField('end');
+                          setShowTimePicker(true);
+                        }}
+                      >
+                        <Image
+                          source={require('../../assets/time_icon.png')}
+                          style={styles.inlineIcon}
+                          resizeMode="contain"
+                        />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+              </>
+            ) : (
+              <View style={styles.row2}>
+                <View style={{ flex: 1, marginRight: 8 }}>
+                  <Text style={styles.inputLabel}>Date</Text>
+                  <View style={styles.inputWithIcon}>
+                    <TextInput
+                      placeholder="Date"
+                      placeholderTextColor="#9CA3AF"
+                      value={date}
+                      onChangeText={setDate}
+                      style={[styles.input, { paddingRight: 40 }]}
+                    />
+                    <TouchableOpacity
+                      style={styles.iconOverlay}
+                      onPress={() => {
+                        setPickerTarget('new');
+                        setShowDatePicker(true);
+                      }}
+                    >
+                      <Image
+                        source={require('../../assets/appointment_icon.png')}
+                        style={styles.inlineIcon}
+                        resizeMode="contain"
+                      />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                <View style={{ flex: 1, marginLeft: 8 }}>
+                  <Text style={styles.inputLabel}>Time</Text>
+                  <View style={styles.inputWithIcon}>
+                    <TextInput
+                      placeholder="Time"
+                      placeholderTextColor="#9CA3AF"
+                      value={time ? getTimeRangeLabel(time) : time}
+                      onChangeText={setTime}
+                      editable={false}
+                      style={[styles.input, { paddingRight: 40 }]}
+                    />
+                    <TouchableOpacity
+                      style={styles.iconOverlay}
+                      onPress={() => {
+                        setPickerTarget('new');
+                        setTimePickerField('start');
+                        setShowTimePicker(true);
+                      }}
+                    >
+                      <Image
+                        source={require('../../assets/time_icon.png')}
+                        style={styles.inlineIcon}
+                        resizeMode="contain"
+                      />
+                    </TouchableOpacity>
+                  </View>
                 </View>
               </View>
-              <View style={{ flex: 1, marginLeft: 8 }}>
-                <Text style={styles.inputLabel}>Time</Text>
-                <View style={styles.inputWithIcon}>
-                  <TextInput
-                    placeholder="Time"
-                    placeholderTextColor="#9CA3AF"
-                    value={time}
-                    onChangeText={setTime}
-                    style={[styles.input, { paddingRight: 40 }]}
-                  />
-                  <TouchableOpacity
-                    style={styles.iconOverlay}
-                    onPress={() => setShowTimePicker(true)}
-                  >
-                    <Image
-                      source={require('../../assets/time_icon.png')}
-                      style={styles.inlineIcon}
-                      resizeMode="contain"
-                    />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
+            )}
 
             <View style={styles.formGroup}>
               <Text style={styles.inputLabel}>Notes</Text>
@@ -1390,11 +1771,14 @@ export default function DoctorAppointment() {
                       disabled={d === null || isPastCalendarDate(d)}
                       onPress={() => {
                         if (d) {
+                          const selected = new Date(year, month, d);
                           const mm = String(month + 1).padStart(2, '0');
                           const dd = String(d).padStart(2, '0');
-                          if (pickerTarget === 'new')
+                          if (pickerTarget === 'new') {
                             setDate(`${year}-${mm}-${dd}`);
-                          else setDDate(`${year}-${mm}-${dd}`);
+                          } else {
+                            setDDate(`${year}-${mm}-${dd}`);
+                          }
                           setShowDatePicker(false);
                         }
                       }}
@@ -1553,9 +1937,16 @@ export default function DoctorAppointment() {
                       return;
                     }
                   }
-                  if (pickerTarget === 'new')
-                    setTime(`${hh}:${mm} ${tpPeriod}`);
-                  else setDTime(`${hh}:${mm} ${tpPeriod}`);
+                  if (pickerTarget === 'new') {
+                    if (
+                      newEntryType === 'schedule' &&
+                      timePickerField === 'end'
+                    )
+                      setEndTime(`${hh}:${mm} ${tpPeriod}`);
+                    else setTime(`${hh}:${mm} ${tpPeriod}`);
+                  } else {
+                    setDTime(`${hh}:${mm} ${tpPeriod}`);
+                  }
                   setShowTimePicker(false);
                 }}
               >
@@ -1628,8 +2019,9 @@ export default function DoctorAppointment() {
                   <TextInput
                     placeholder="Time"
                     placeholderTextColor="#9CA3AF"
-                    value={dTime}
+                    value={dTime ? getTimeRangeLabel(dTime) : dTime}
                     onChangeText={setDTime}
+                    editable={false}
                     style={[styles.input, { paddingRight: 40 }]}
                   />
                   <TouchableOpacity
@@ -1782,6 +2174,7 @@ const styles = StyleSheet.create({
   dayCell: {
     width: `${100 / 7}%`,
     height: 36,
+    position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 0.5,
@@ -1794,6 +2187,15 @@ const styles = StyleSheet.create({
   dayTextToday: { color: GREEN, fontWeight: '700' },
   dayCellDisabled: { backgroundColor: '#F3F4F6' },
   dayTextDisabled: { color: '#D1D5DB' },
+  dayDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: GREEN,
+    position: 'absolute',
+    top: 4,
+    right: 4,
+  },
 
   listCard: {
     marginTop: 16,
@@ -1803,6 +2205,7 @@ const styles = StyleSheet.create({
   },
   listHeader: { alignItems: 'center', marginBottom: 8 },
   listTitle: { color: '#000000', fontWeight: '700' },
+  viewAllText: { color: GREEN, fontWeight: '800' },
   listItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1844,7 +2247,17 @@ const styles = StyleSheet.create({
   },
   dateYear: { color: '#111827', fontWeight: '700', fontSize: 10 },
   itemDescWrap: { flex: 1, paddingHorizontal: 12 },
+  itemPatient: { color: '#111827', fontWeight: '800', marginBottom: 2 },
   itemDesc: { color: MUTED, fontSize: 12 },
+  viewBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: GREEN,
+    backgroundColor: '#FFFFFF',
+  },
+  viewBtnText: { color: GREEN, fontWeight: '800' },
   reminderIcon: { width: 20, height: 20, tintColor: GREEN },
   deleteIcon: { width: 20, height: 20, tintColor: '#EF4444', marginLeft: 12 },
   listRowEmpty: {
@@ -1946,6 +2359,28 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 16, fontWeight: '700', color: '#111827' },
   closeBtn: { padding: 6, borderRadius: 14 },
   closeText: { fontSize: 24, color: MUTED, lineHeight: 24 },
+  entryTypeRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  entryTypeBtn: {
+    flex: 1,
+    height: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: BORDER,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  entryTypeBtnActive: {
+    borderColor: GREEN,
+    backgroundColor: '#ECFDF5',
+  },
+  entryTypeText: { color: '#111827', fontWeight: '700' },
+  entryTypeTextActive: { color: GREEN },
   formGroup: { marginTop: 10 },
   inputLabel: { color: '#374151', marginBottom: 6, fontSize: 12 },
   input: {

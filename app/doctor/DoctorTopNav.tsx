@@ -66,8 +66,13 @@ export default function DoctorTopNav({
 
       const rawLocal = await AsyncStorage.getItem('doctor_notifications');
       const localArr: any[] = rawLocal ? JSON.parse(rawLocal) : [];
+      const prunedLocal = Array.isArray(localArr)
+        ? localArr.filter(
+            (x: any) => !String(x?.id || '').startsWith('apptreq-'),
+          )
+        : [];
       const byId: Record<string, any> = {};
-      for (const it of Array.isArray(localArr) ? localArr : []) {
+      for (const it of prunedLocal) {
         if (it?.id) byId[String(it.id)] = it;
       }
       for (const it of mapped) {

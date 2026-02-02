@@ -31,15 +31,43 @@ export default function DoctorEditProfile() {
   // Local editable state; hydrated from session
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
+  const [specialty, setSpecialty] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   const [birthdate, setBirthdate] = useState('');
   const [gender, setGender] = useState('');
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showSpecialtyPicker, setShowSpecialtyPicker] = useState(false);
   const [avatarUri, setAvatarUri] = useState<string | undefined>(undefined);
   const [unreadCount, setUnreadCount] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+
+  const specialtyOptions = useMemo(
+    () => [
+      'General Medicine',
+      'Family Medicine',
+      'Pediatrics',
+      'Internal Medicine',
+      'Obstetrics and Gynecology',
+      'Cardiology',
+      'Dermatology',
+      'Neurology',
+      'Orthopedics',
+      'Ophthalmology',
+      'ENT',
+      'Psychiatry',
+      'Radiology',
+      'Anesthesiology',
+      'Emergency Medicine',
+      'Surgery',
+      'Urology',
+      'Nephrology',
+      'Pulmonology',
+      'Gastroenterology',
+    ],
+    [],
+  );
 
   const initials = useMemo(() => {
     const parts = (name || '').trim().split(/\s+/);
@@ -56,18 +84,26 @@ export default function DoctorEditProfile() {
   const getAuthHeaders = React.useCallback(async () => {
     try {
       const raw = await AsyncStorage.getItem('session');
-      if (!raw)
-        return { 'Content-Type': 'application/json' } as Record<string, string>;
+      const base = { 'Content-Type': 'application/json' } as Record<
+        string,
+        string
+      >;
+      if (!raw) return base;
       const sess = JSON.parse(raw);
-      const token = sess?.token || sess?.user?.token || sess?.accessToken;
-      if (token)
-        return {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        } as Record<string, string>;
-      return { 'Content-Type': 'application/json' };
+      const token =
+        sess?.token ||
+        sess?.accessToken ||
+        sess?.access_token ||
+        sess?.user?.token ||
+        sess?.user?.accessToken ||
+        sess?.user?.access_token;
+      const userId = sess?.user?.id || sess?.id || sess?.user_id;
+      const withAuth = token
+        ? { ...base, Authorization: `Bearer ${token}` }
+        : base;
+      return userId ? { ...withAuth, 'X-User-Id': String(userId) } : withAuth;
     } catch {
-      return { 'Content-Type': 'application/json' };
+      return { 'Content-Type': 'application/json' } as Record<string, string>;
     }
   }, []);
 
@@ -93,6 +129,7 @@ export default function DoctorEditProfile() {
       setName(user?.full_name || user?.fullName || user?.name || '');
       setEmail(user?.email || '');
       setRole(roleLabel(user?.role));
+      setSpecialty(user?.specialty || '');
       setPhone(user?.phone || '');
       setAddress(user?.address || '');
       setBirthdate(user?.birthdate || '');
@@ -161,6 +198,7 @@ export default function DoctorEditProfile() {
           name,
           email,
           role: roleValue || 'user',
+          specialty: specialty || null,
           phone,
           address,
           birthdate,
@@ -171,8 +209,16 @@ export default function DoctorEditProfile() {
       if (!res.ok) {
         let msg = `Save failed (HTTP ${res.status})`;
         try {
-          const data = await res.json();
-          if (data?.message) msg = data.message;
+          const text = await res.text();
+          if (text) {
+            try {
+              const data = JSON.parse(text);
+              const extra = data?.error || data?.message;
+              if (extra) msg = `${msg}: ${extra}`;
+            } catch {
+              msg = `${msg}: ${text}`;
+            }
+          }
         } catch {}
         throw new Error(msg);
       }
@@ -206,6 +252,7 @@ export default function DoctorEditProfile() {
         full_name: latest?.name ?? data?.name ?? name,
         email: latest?.email ?? data?.email ?? email,
         role: latest?.role ?? data?.role ?? roleValue,
+        specialty: latest?.specialty ?? data?.specialty ?? specialty,
         phone: latest?.phone ?? data?.phone ?? phone,
         address: latest?.address ?? data?.address ?? address,
         birthdate: latest?.birthdate ?? data?.birthdate ?? birthdate,
@@ -228,6 +275,7 @@ export default function DoctorEditProfile() {
       setBirthdate(updatedUser.birthdate || birthdate);
       setGender(updatedUser.gender || gender);
       setAvatarUri(updatedUser.avatar_uri || avatarUri);
+      setSpecialty(updatedUser.specialty || specialty);
       Alert.alert('Saved', 'Profile changes have been saved.');
       try {
         const rawAct = await AsyncStorage.getItem('doctor_activity');
@@ -325,7 +373,10 @@ export default function DoctorEditProfile() {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.name}>{name}</Text>
-                <Text style={styles.role}>{role}</Text>
+                <Text style={styles.role}>
+                  {role}
+                  {specialty ? `: ${specialty}` : ''}
+                </Text>
               </View>
             </View>
 
@@ -351,6 +402,26 @@ export default function DoctorEditProfile() {
                 ]}
                 placeholderTextColor="#9CA3AF"
               />
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.inputLabel}>Specialty</Text>
+              <TouchableOpacity
+                activeOpacity={0.9}
+                onPress={() => setShowSpecialtyPicker(true)}
+              >
+                <View style={[styles.input, styles.selectInput]}>
+                  <Text
+                    style={[
+                      styles.selectText,
+                      !specialty && { color: '#9CA3AF' },
+                    ]}
+                  >
+                    {specialty || 'Select specialty'}
+                  </Text>
+                  <Text style={styles.selectChevron}>▾</Text>
+                </View>
+              </TouchableOpacity>
             </View>
             <View style={styles.formGroup}>
               <Text style={styles.inputLabel}>Email</Text>
@@ -574,6 +645,68 @@ export default function DoctorEditProfile() {
                 </View>
               </Modal>
             )}
+
+            <Modal
+              visible={showSpecialtyPicker}
+              transparent
+              animationType="fade"
+              onRequestClose={() => setShowSpecialtyPicker(false)}
+            >
+              <View style={styles.specialtyModalOverlay}>
+                <View style={styles.specialtyModalCard}>
+                  <View style={styles.specialtyModalHeader}>
+                    <Text style={styles.specialtyModalTitle}>
+                      Select Specialty
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => setShowSpecialtyPicker(false)}
+                    >
+                      <Text style={styles.specialtyModalClose}>✕</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <ScrollView
+                    showsVerticalScrollIndicator={false}
+                    style={{ maxHeight: 420 }}
+                  >
+                    {specialtyOptions.map(opt => (
+                      <TouchableOpacity
+                        key={opt}
+                        style={styles.specialtyOption}
+                        activeOpacity={0.85}
+                        onPress={() => {
+                          setSpecialty(opt);
+                          setShowSpecialtyPicker(false);
+                        }}
+                      >
+                        <Text
+                          style={[
+                            styles.specialtyOptionText,
+                            specialty === opt &&
+                              styles.specialtyOptionTextActive,
+                          ]}
+                        >
+                          {opt}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+
+                  <View style={{ height: 10 }} />
+
+                  <TouchableOpacity
+                    style={styles.specialtyClearBtn}
+                    activeOpacity={0.9}
+                    onPress={() => {
+                      setSpecialty('');
+                      setShowSpecialtyPicker(false);
+                    }}
+                  >
+                    <Text style={styles.specialtyClearText}>Clear</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </Modal>
           </View>
         </ScrollView>
 
@@ -734,6 +867,21 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     color: '#111827',
   },
+  selectInput: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  selectText: {
+    flex: 1,
+    color: '#111827',
+    fontWeight: '600',
+  },
+  selectChevron: {
+    color: MUTED,
+    fontWeight: '900',
+    marginLeft: 10,
+  },
   dateRow: { position: 'relative', justifyContent: 'center' },
   dateInput: { paddingRight: 44 },
   dateBtn: {
@@ -860,5 +1008,69 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: MUTED,
     textAlign: 'center',
+  },
+
+  specialtyModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+  },
+  specialtyModalCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: BORDER,
+  },
+  specialtyModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  specialtyModalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  specialtyModalClose: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: MUTED,
+    lineHeight: 22,
+  },
+  specialtyOption: {
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
+    marginBottom: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  specialtyOptionText: {
+    color: '#111827',
+    fontWeight: '700',
+  },
+  specialtyOptionTextActive: {
+    color: GREEN,
+  },
+  specialtyClearBtn: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: BORDER,
+    backgroundColor: '#F9FAFB',
+  },
+  specialtyClearText: {
+    color: MUTED,
+    fontWeight: '800',
   },
 });

@@ -8,6 +8,8 @@ import {
   Image,
   FlatList,
   Modal,
+  Alert,
+  ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
@@ -29,6 +31,7 @@ type NotificationItem = {
   recipientName?: string;
   recipientId?: string | number;
   toId?: string | number;
+  meta?: any;
 };
 
 function BottomItem({
@@ -185,6 +188,7 @@ export default function PatientNotification() {
       recipientName: n?.recipientName ?? n?.recipient_name ?? n?.toName,
       recipientId: n?.recipientId ?? n?.recipient_id,
       toId: n?.toId ?? n?.to_id,
+      meta: n,
     } as NotificationItem;
   }, []);
 
@@ -216,6 +220,7 @@ export default function PatientNotification() {
             recipientName: x?.recipientName,
             recipientId: x?.recipientId,
             toId: x?.toId,
+            meta: x,
           }))
         : [];
 
@@ -266,11 +271,40 @@ export default function PatientNotification() {
         .filter(Boolean)
         .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
-      setItems(merged);
+      const normalizedMerged = merged.map(it => {
+        const meta = (it as any)?.meta || {};
+        const fallbackTs = meta?.created_at
+          ? new Date(meta.created_at).getTime()
+          : meta?.timestamp
+          ? Number(meta.timestamp)
+          : undefined;
+        const ts =
+          typeof it.timestamp === 'number' && Number.isFinite(it.timestamp)
+            ? it.timestamp
+            : typeof fallbackTs === 'number' && Number.isFinite(fallbackTs)
+            ? fallbackTs
+            : undefined;
+        const title =
+          String(it.title || '').trim() ||
+          String(meta?.title || '').trim() ||
+          'Notification';
+        const message =
+          String(it.message || '').trim() ||
+          String(meta?.message || meta?.body || '').trim() ||
+          '';
+        return {
+          ...it,
+          title,
+          message,
+          timestamp: ts,
+        } as NotificationItem;
+      });
+
+      setItems(normalizedMerged);
       try {
         await AsyncStorage.setItem(
           'patient_notifications',
-          JSON.stringify(merged),
+          JSON.stringify(normalizedMerged),
         );
       } catch {}
     } catch {
@@ -324,72 +358,361 @@ export default function PatientNotification() {
     [getAuthHeaders, items],
   );
 
-  const clearAll = React.useCallback(async () => {
-    try {
-      setItems([]);
-      await AsyncStorage.setItem('patient_notifications', JSON.stringify([]));
-    } catch {}
+  const deleteNotification = React.useCallback(
+    async (id: string) => {
+      try {
+        const next = items.filter(n => n.id !== id);
+        setItems(next);
+        try {
+          await AsyncStorage.setItem(
+            'patient_notifications',
+            JSON.stringify(next),
+          );
+        } catch {}
+
+        try {
+          const headers = await getAuthHeaders();
+          await fetch(
+            `${API_BASE}/api/notifications/${encodeURIComponent(id)}`,
+            {
+              method: 'DELETE',
+              headers,
+            },
+          );
+        } catch {}
+      } catch {}
+    },
+    [getAuthHeaders, items],
+  );
+
+  const getAccent = React.useCallback((it: NotificationItem) => {
+    const title = String(it?.title || '').toLowerCase();
+    if (title.includes('rescheduled')) {
+      return { bg: '#FEF3C7', tint: '#F59E0B' };
+    }
+    if (title.includes('prescription')) {
+      return { bg: '#DBEAFE', tint: '#2563EB' };
+    }
+    if (title.includes('accepted')) {
+      return { bg: '#DCFCE7', tint: '#16A34A' };
+    }
+    return { bg: '#ECFDF5', tint: GREEN };
   }, []);
+
+  const getDetailIcon = React.useCallback((it: NotificationItem | null) => {
+    const title = String(it?.title || '').toLowerCase();
+    if (title.includes('rescheduled')) {
+      return require('../../assets/calendar_emoji.png');
+    }
+    if (title.includes('prescription')) {
+      return require('../../assets/prescription_emoji.png');
+    }
+    return require('../../assets/notification_icon.png');
+  }, []);
+
+  const formatMaybeDateTime = React.useCallback((v: any) => {
+    if (v == null) return '';
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+      return new Date(v).toLocaleString();
+    }
+    const s = String(v || '').trim();
+    if (!s) return '';
+    const parsed = Date.parse(s);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return new Date(parsed).toLocaleString();
+    }
+    return s;
+  }, []);
+
+  const parseFieldsFromMessage = React.useCallback((msgRaw: string) => {
+    const msg = String(msgRaw || '').trim();
+    const parts = msg
+      .split(/\n|•/)
+      .map(p => String(p || '').trim())
+      .filter(Boolean);
+
+    const out: Record<string, string> = {};
+    for (const p of parts) {
+      const i = p.indexOf(':');
+      if (i > 0) {
+        const k = p.slice(0, i).trim().toLowerCase();
+        const v = p.slice(i + 1).trim();
+        if (k && v) out[k] = v;
+      }
+    }
+    return out;
+  }, []);
+
+  const parseDoctorName = React.useCallback((msgRaw: string) => {
+    const msg = String(msgRaw || '');
+    const m = msg.match(/\bDr\.?\s+([A-Za-z][A-Za-z .'-]*)/);
+    if (!m) return '';
+    const full = `Dr. ${String(m[1] || '').trim()}`.replace(/\s+/g, ' ').trim();
+    return full === 'Dr.' ? '' : full;
+  }, []);
+
+  const parseRescheduled = React.useCallback(
+    (it: NotificationItem) => {
+      const fields = parseFieldsFromMessage(it.message);
+      const msg = String(it.message || '');
+      const meta = (it as any)?.meta || {};
+      const doctor =
+        meta?.doctor ||
+        meta?.doctorName ||
+        meta?.doctor_name ||
+        fields['doctor'] ||
+        fields['dr'] ||
+        fields['physician'] ||
+        parseDoctorName(msg);
+
+      let original =
+        meta?.originalDate ||
+        meta?.oldDate ||
+        meta?.previousDate ||
+        fields['original date'] ||
+        fields['original'] ||
+        fields['from'] ||
+        fields['old date'] ||
+        '';
+      let next =
+        meta?.newDate ||
+        meta?.rescheduledTo ||
+        meta?.updatedDate ||
+        fields['new date'] ||
+        fields['new'] ||
+        fields['to'] ||
+        fields['updated date'] ||
+        '';
+
+      const m = msg.match(/rescheduled\s+from\s+(.+?)\s+to\s+(.+?)(?:\.|$)/i);
+      if (m) {
+        if (!original) original = String(m[1] || '').trim();
+        if (!next) next = String(m[2] || '').trim();
+      }
+
+      const reason =
+        meta?.reason ||
+        meta?.notes ||
+        meta?.note ||
+        fields['reason'] ||
+        fields['note'] ||
+        fields['notes'] ||
+        '';
+      return {
+        doctor,
+        original: formatMaybeDateTime(original),
+        next: formatMaybeDateTime(next),
+        reason: String(reason || '').trim(),
+      };
+    },
+    [formatMaybeDateTime, parseDoctorName, parseFieldsFromMessage],
+  );
+
+  const parseAccepted = React.useCallback(
+    (it: NotificationItem) => {
+      const fields = parseFieldsFromMessage(it.message);
+      const msg = String(it.message || '');
+      const meta = (it as any)?.meta || {};
+      const doctor =
+        meta?.doctor ||
+        meta?.doctorName ||
+        meta?.doctor_name ||
+        fields['doctor'] ||
+        fields['dr'] ||
+        fields['physician'] ||
+        parseDoctorName(msg);
+
+      let appointmentDate =
+        meta?.appointmentDate ||
+        meta?.dateTime ||
+        meta?.date ||
+        fields['appointment date'] ||
+        fields['date'] ||
+        fields['when'] ||
+        '';
+      if (!appointmentDate) {
+        const m = msg.match(
+          /accepted\s+your\s+appointment\s+request\s+for\s+(.+?)(?:\.|$)/i,
+        );
+        if (m) appointmentDate = String(m[1] || '').trim();
+      }
+
+      const location =
+        meta?.location ||
+        meta?.clinic ||
+        meta?.room ||
+        fields['location'] ||
+        fields['clinic'] ||
+        '';
+      const appointmentType =
+        meta?.appointmentType ||
+        meta?.type ||
+        meta?.service ||
+        meta?.specialty ||
+        fields['appointment type'] ||
+        fields['type'] ||
+        fields['service'] ||
+        '';
+
+      return {
+        doctor,
+        appointmentDate: formatMaybeDateTime(appointmentDate),
+        location: String(location || '').trim(),
+        appointmentType: String(appointmentType || '').trim(),
+      };
+    },
+    [formatMaybeDateTime, parseDoctorName, parseFieldsFromMessage],
+  );
+
+  const parsePrescription = React.useCallback(
+    (it: NotificationItem) => {
+      const fields = parseFieldsFromMessage(it.message);
+      const msg = String(it.message || '');
+      const meta = (it as any)?.meta || {};
+      const doctor =
+        meta?.prescribedBy ||
+        meta?.prescribed_by ||
+        meta?.doctor ||
+        meta?.doctorName ||
+        meta?.doctor_name ||
+        fields['prescribed by'] ||
+        fields['doctor'] ||
+        fields['dr'] ||
+        fields['physician'] ||
+        parseDoctorName(msg);
+
+      let medicine =
+        meta?.medicine ||
+        meta?.drug ||
+        meta?.rx ||
+        fields['medicine'] ||
+        fields['drug'] ||
+        fields['rx'] ||
+        '';
+      if (!medicine) {
+        const parts = msg.split('•').map(s => String(s || '').trim());
+        if (parts.length >= 2) medicine = parts[parts.length - 1];
+      }
+
+      let dosage = meta?.dosage || fields['dosage'] || '';
+      if (!dosage) {
+        const m = String(medicine || '').match(
+          /(\d+(?:\.\d+)?\s*(?:mg|g|mcg|ml))/i,
+        );
+        if (m) dosage = String(m[1] || '').trim();
+      }
+      const instructions =
+        meta?.instructions ||
+        meta?.direction ||
+        fields['instructions'] ||
+        fields['direction'] ||
+        '';
+      const duration = meta?.duration || fields['duration'] || '';
+
+      return {
+        doctor: String(doctor || '').trim(),
+        medicine: String(medicine || '').trim(),
+        dosage: String(dosage || '').trim(),
+        instructions: String(instructions || '').trim(),
+        duration: String(duration || '').trim(),
+      };
+    },
+    [parseDoctorName, parseFieldsFromMessage],
+  );
 
   const openDetail = React.useCallback((it: NotificationItem) => {
     setDetailItem(it);
     setShowDetail(true);
   }, []);
 
-  const renderItem = ({ item }: { item: NotificationItem }) => (
-    <TouchableOpacity
-      style={styles.card}
-      activeOpacity={0.9}
-      onPress={async () => {
-        if (!item.read) {
-          try {
-            await markAsRead(item.id);
-          } catch {}
-        }
-        openDetail(item);
-      }}
-    >
-      <View style={styles.row}>
-        <View style={styles.iconWrap}>
+  const renderItem = ({ item }: { item: NotificationItem }) => {
+    const accent = getAccent(item);
+    return (
+      <View style={styles.card}>
+        <TouchableOpacity
+          style={styles.cardTop}
+          activeOpacity={0.9}
+          onPress={async () => {
+            if (!item.read) {
+              try {
+                await markAsRead(item.id);
+              } catch {}
+            }
+            openDetail(item);
+          }}
+        >
+          <View style={styles.row}>
+            <View style={[styles.iconWrap, { backgroundColor: accent.bg }]}>
+              <Image
+                source={require('../../assets/notification_icon.png')}
+                style={[styles.rowIcon, { tintColor: accent.tint }]}
+                resizeMode="contain"
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle} numberOfLines={1}>
+                {item.title}
+              </Text>
+              <Text style={styles.rowSub} numberOfLines={2}>
+                {item.message}
+              </Text>
+              {!!item.timestamp && (
+                <Text style={styles.rowTime}>
+                  {new Date(item.timestamp).toLocaleString()}
+                </Text>
+              )}
+            </View>
+          </View>
+        </TouchableOpacity>
+
+        <View style={styles.cardDivider} />
+
+        <TouchableOpacity
+          style={styles.deleteRow}
+          activeOpacity={0.85}
+          onPress={() => {
+            Alert.alert(
+              'Delete Notification',
+              'Are you sure you want to delete this notification?',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Delete',
+                  style: 'destructive',
+                  onPress: async () => {
+                    await deleteNotification(item.id);
+                  },
+                },
+              ],
+            );
+          }}
+        >
           <Image
-            source={require('../../assets/notification_icon.png')}
-            style={styles.rowIcon}
+            source={require('../../assets/delete_icon.png')}
+            style={styles.deleteIcon}
             resizeMode="contain"
           />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.rowTitle} numberOfLines={1}>
-            {item.title}
-          </Text>
-          <Text style={styles.rowSub} numberOfLines={2}>
-            {item.message}
-          </Text>
-          {!!item.timestamp && (
-            <Text style={styles.rowTime}>
-              {new Date(item.timestamp).toLocaleString()}
-            </Text>
-          )}
-        </View>
-        {!item.read && <View style={styles.unreadDot} />}
+          <Text style={styles.deleteText}>Delete Notification</Text>
+        </TouchableOpacity>
       </View>
-    </TouchableOpacity>
-  );
+    );
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        <View style={[styles.topHeader, { paddingTop: insets.top }]}>
-          <Image
-            source={require('../../assets/appicon.png')}
-            style={styles.topHeaderLogo}
-            resizeMode="contain"
-          />
-          <View style={styles.topHeaderIcons}>
-            <TouchableOpacity style={styles.iconBtn} onPress={() => {}}>
+        <View style={[styles.headerContainer, { paddingTop: insets.top }]}>
+          <Text style={styles.header}>Notifications</Text>
+          <View style={styles.headerActions}>
+            <TouchableOpacity
+              style={styles.headerIconBtn}
+              onPress={() => {}}
+              activeOpacity={0.8}
+            >
               <View style={{ position: 'relative' }}>
                 <Image
                   source={require('../../assets/notification_icon.png')}
-                  style={styles.topHeaderIconImg}
+                  style={styles.headerIconImg}
                   resizeMode="contain"
                 />
                 {unreadCount > 0 && (
@@ -420,54 +743,42 @@ export default function PatientNotification() {
                 )}
               </View>
             </TouchableOpacity>
+
             <TouchableOpacity
-              style={styles.topProfileBtn}
+              style={styles.headerProfileBtn}
               onPress={() => setShowProfileMenu(true)}
-              activeOpacity={0.8}
+              activeOpacity={0.85}
             >
-              <View style={styles.topProfileAvatar}>
-                <Text style={styles.topProfileAvatarText}>
+              <View style={styles.headerProfileAvatar}>
+                <Text style={styles.headerProfileAvatarText}>
                   {String(userName || 'P')
                     .charAt(0)
                     .toUpperCase()}
                 </Text>
               </View>
-              <View style={styles.topProfileTextCol}>
-                <Text style={styles.topProfileName} numberOfLines={1}>
+              <View style={styles.headerProfileTextCol}>
+                <Text style={styles.headerProfileName} numberOfLines={1}>
                   {String(userName || 'Patient')}
                 </Text>
-                <Text style={styles.topProfileRole} numberOfLines={1}>
+                <Text style={styles.headerProfileRole} numberOfLines={1}>
                   {String(userRole || 'Patient')}
                 </Text>
               </View>
               <Image
                 source={require('../../assets/dropdown.png')}
-                style={styles.topProfileChevron}
+                style={styles.headerProfileChevron}
                 resizeMode="contain"
               />
             </TouchableOpacity>
           </View>
         </View>
 
-        <View style={styles.topDivider} />
-
         <View style={styles.body}>
-          <View style={styles.titleRow}>
-            <Text style={styles.title}>Notifications</Text>
-            <TouchableOpacity
-              style={styles.clearBtn}
-              onPress={clearAll}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.clearBtnText}>Clear</Text>
-            </TouchableOpacity>
-          </View>
-
           <FlatList
             data={items}
             keyExtractor={it => it.id}
             contentContainerStyle={{ paddingBottom: 120 }}
-            ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+            ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
             refreshing={refreshing}
             onRefresh={onRefresh}
             ListEmptyComponent={() => (
@@ -533,56 +844,204 @@ export default function PatientNotification() {
         >
           <View style={styles.modalBackdrop}>
             <View style={styles.modalCard}>
-              <View style={styles.modalHeader}>
-                <View style={styles.detailIconWrap}>
-                  <Image
-                    source={require('../../assets/notification_icon.png')}
-                    style={styles.detailIcon}
-                    resizeMode="contain"
-                  />
-                </View>
+              <View style={styles.detailHeaderRow}>
+                <Text style={styles.detailHeaderTitle} numberOfLines={1}>
+                  {detailItem?.title || 'Notification'}
+                </Text>
                 <TouchableOpacity
-                  style={styles.closeBtn}
+                  style={styles.detailHeaderClose}
                   onPress={() => setShowDetail(false)}
+                  activeOpacity={0.8}
                 >
-                  <Text style={styles.closeText}>×</Text>
+                  <Text style={styles.detailHeaderCloseText}>×</Text>
                 </TouchableOpacity>
               </View>
-              <View style={styles.detailHeaderBlock}>
-                <Text style={styles.detailTitle}>
-                  {detailItem?.title || ''}
-                </Text>
-                {!!detailItem?.timestamp && (
-                  <Text style={styles.detailTime}>
-                    {new Date(detailItem.timestamp).toLocaleString()}
-                  </Text>
-                )}
-              </View>
-              <View style={styles.detailPanel}>
-                <Text style={styles.panelLabel}>Details</Text>
-                <View style={styles.panelBody}>
-                  <Text style={styles.detailBody}>
-                    {detailItem?.message || ''}
-                  </Text>
-                </View>
-              </View>
-              <View style={styles.detailActions}>
-                {!detailItem?.read && detailItem?.id && (
-                  <TouchableOpacity
-                    style={styles.markBtn}
-                    onPress={async () => {
-                      await markAsRead(detailItem.id);
-                    }}
+
+              <ScrollView
+                style={styles.detailScrollView}
+                contentContainerStyle={styles.detailScroll}
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.receivedRow}>
+                  <View
+                    style={[
+                      styles.receivedIconWrap,
+                      {
+                        backgroundColor: getAccent(detailItem || ({} as any))
+                          .bg,
+                      },
+                    ]}
                   >
-                    <Text style={styles.markBtnText}>Mark as Read</Text>
-                  </TouchableOpacity>
-                )}
-                <View style={{ flex: 1 }} />
+                    {String(detailItem?.title || '')
+                      .toLowerCase()
+                      .includes('accepted') ? (
+                      <Text style={styles.receivedCheck}>✓</Text>
+                    ) : (
+                      <Image
+                        source={getDetailIcon(detailItem)}
+                        style={styles.receivedIcon}
+                        resizeMode="contain"
+                      />
+                    )}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.receivedLabel}>Received</Text>
+                    <Text style={styles.receivedValue}>
+                      {detailItem?.timestamp
+                        ? new Date(detailItem.timestamp).toLocaleString()
+                        : '-'}
+                    </Text>
+                  </View>
+                </View>
+
+                {(() => {
+                  const it = detailItem;
+                  if (!it) return null;
+                  const title = String(it.title || '').toLowerCase();
+
+                  if (title.includes('rescheduled')) {
+                    const p = parseRescheduled(it);
+                    return (
+                      <View style={styles.detailContent}>
+                        <View style={styles.detailKV}>
+                          <Text style={styles.detailK}>Doctor</Text>
+                          <Text style={styles.detailV}>{p.doctor || '-'}</Text>
+                        </View>
+
+                        <View
+                          style={[styles.detailBox, styles.detailBoxDanger]}
+                        >
+                          <Text style={styles.detailBoxLabel}>
+                            Original Date
+                          </Text>
+                          <Text
+                            style={[styles.detailBoxValue, styles.detailStrike]}
+                          >
+                            {p.original || '-'}
+                          </Text>
+                        </View>
+
+                        <View
+                          style={[styles.detailBox, styles.detailBoxSuccess]}
+                        >
+                          <Text style={styles.detailBoxLabel}>New Date</Text>
+                          <Text style={styles.detailBoxValue}>
+                            {p.next || '-'}
+                          </Text>
+                        </View>
+
+                        <View style={styles.detailKV}>
+                          <Text style={styles.detailK}>Reason</Text>
+                          <View style={styles.detailOutlineBox}>
+                            <Text style={styles.detailOutlineText}>
+                              {p.reason || it.message || '-'}
+                            </Text>
+                          </View>
+                        </View>
+                      </View>
+                    );
+                  }
+
+                  if (title.includes('prescription')) {
+                    const p = parsePrescription(it);
+                    return (
+                      <View style={styles.detailContent}>
+                        <View style={styles.detailKV}>
+                          <Text style={styles.detailK}>Prescribed by</Text>
+                          <Text style={styles.detailV}>{p.doctor || '-'}</Text>
+                        </View>
+
+                        <View style={[styles.detailBox, styles.detailBoxInfo]}>
+                          <Text style={styles.detailBoxLabel}>Medicine</Text>
+                          <Text style={styles.detailBoxValue}>
+                            {p.medicine || '-'}
+                          </Text>
+                        </View>
+
+                        <View style={styles.detailKV}>
+                          <Text style={styles.detailK}>Dosage</Text>
+                          <Text style={styles.detailV}>{p.dosage || '-'}</Text>
+                        </View>
+
+                        <View style={styles.detailKV}>
+                          <Text style={styles.detailK}>Instructions</Text>
+                          <Text style={styles.detailV}>
+                            {p.instructions || it.message || '-'}
+                          </Text>
+                        </View>
+
+                        <View style={styles.detailKV}>
+                          <Text style={styles.detailK}>Duration</Text>
+                          <Text style={styles.detailV}>
+                            {p.duration || '-'}
+                          </Text>
+                        </View>
+
+                        <View style={styles.detailKV}>
+                          <Text style={styles.detailK}>Details</Text>
+                          <Text style={styles.detailV}>
+                            {String(it.message || '').trim() ||
+                              'No details available.'}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  }
+
+                  if (title.includes('accepted')) {
+                    const p = parseAccepted(it);
+                    return (
+                      <View style={styles.detailContent}>
+                        <View style={styles.detailKV}>
+                          <Text style={styles.detailK}>Doctor</Text>
+                          <Text style={styles.detailV}>{p.doctor || '-'}</Text>
+                        </View>
+
+                        <View style={styles.detailKV}>
+                          <Text style={styles.detailK}>Appointment Date</Text>
+                          <Text style={styles.detailV}>
+                            {p.appointmentDate || '-'}
+                          </Text>
+                        </View>
+
+                        <View style={styles.detailKV}>
+                          <Text style={styles.detailK}>Location</Text>
+                          <Text style={styles.detailV}>
+                            {p.location || '-'}
+                          </Text>
+                        </View>
+
+                        <View style={styles.detailKV}>
+                          <Text style={styles.detailK}>Appointment Type</Text>
+                          <Text style={styles.detailV}>
+                            {p.appointmentType || '-'}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  }
+
+                  return (
+                    <View style={styles.detailContent}>
+                      <View style={styles.detailKV}>
+                        <Text style={styles.detailK}>Details</Text>
+                        <Text style={styles.detailV}>
+                          {String(it.message || '').trim() ||
+                            'No details available.'}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })()}
+              </ScrollView>
+
+              <View style={styles.detailFooter}>
                 <TouchableOpacity
-                  style={styles.okBtn}
+                  style={styles.detailCloseBtn}
                   onPress={() => setShowDetail(false)}
+                  activeOpacity={0.9}
                 >
-                  <Text style={styles.okBtnText}>Close</Text>
+                  <Text style={styles.detailCloseBtnText}>Close</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -626,34 +1085,38 @@ export default function PatientNotification() {
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#FFFFFF' },
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
-  topHeader: {
+  safeArea: { flex: 1, backgroundColor: '#F3F4F6' },
+  container: { flex: 1, padding: 16, backgroundColor: '#F3F4F6' },
+  headerContainer: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  header: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#2d3748',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  headerIconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: '#FFFFFF',
-    marginTop: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  topHeaderLogo: { width: 40, height: 40 },
-  topHeaderIcons: {
+  headerIconImg: { width: 20, height: 20, tintColor: '#111827' },
+  headerProfileBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
   },
-  iconBtn: { padding: 8 },
-  topHeaderIconImg: { width: 20, height: 20, tintColor: GREEN },
-  topProfileBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 0,
-    paddingHorizontal: 0,
-    borderRadius: 0,
-    backgroundColor: 'transparent',
-  },
-  topProfileAvatar: {
+  headerProfileAvatar: {
     width: 44,
     height: 44,
     borderRadius: 22,
@@ -661,36 +1124,40 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  topProfileAvatarText: {
+  headerProfileAvatarText: {
     color: '#FFFFFF',
     fontSize: 18,
-    fontWeight: '700',
+    fontWeight: '800',
   },
-  topProfileTextCol: {
-    marginLeft: 12,
-    marginRight: 10,
-    maxWidth: 160,
+  headerProfileTextCol: {
+    marginLeft: 10,
+    marginRight: 8,
+    maxWidth: 140,
   },
-  topProfileName: {
-    fontSize: 14,
-    fontWeight: '700',
+  headerProfileName: {
     color: '#111827',
+    fontWeight: '800',
+    fontSize: 14,
   },
-  topProfileRole: {
-    fontSize: 12,
-    color: MUTED,
+  headerProfileRole: {
     marginTop: 2,
+    color: MUTED,
+    fontWeight: '600',
+    fontSize: 12,
   },
-  topProfileChevron: { width: 14, height: 14, tintColor: '#111827' },
-  topDivider: { height: 1, backgroundColor: BORDER },
-  body: { flex: 1, paddingHorizontal: 16, paddingTop: 12 },
+  headerProfileChevron: {
+    width: 14,
+    height: 14,
+    tintColor: '#111827',
+    opacity: 0.9,
+  },
+  body: { flex: 1, paddingTop: 4 },
   titleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     marginBottom: 10,
   },
-  title: { fontSize: 22, fontWeight: '800', color: '#111827' },
   clearBtn: {
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -701,11 +1168,23 @@ const styles = StyleSheet.create({
   },
   clearBtnText: { color: '#111827', fontWeight: '700' },
   card: {
-    backgroundColor: CARD_BG,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: BORDER,
     borderRadius: 14,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 2,
+  },
+  cardTop: {
     padding: 14,
+  },
+  cardDivider: {
+    height: 1,
+    backgroundColor: BORDER,
   },
   row: { flexDirection: 'row', alignItems: 'center' },
   iconWrap: {
@@ -726,12 +1205,21 @@ const styles = StyleSheet.create({
   },
   rowSub: { fontSize: 13, color: MUTED, lineHeight: 18 },
   rowTime: { fontSize: 12, color: '#9CA3AF', marginTop: 6 },
-  unreadDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#EF4444',
-    marginLeft: 10,
+  deleteRow: {
+    height: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  deleteIcon: {
+    width: 16,
+    height: 16,
+    tintColor: '#EF4444',
+  },
+  deleteText: {
+    color: '#EF4444',
+    fontWeight: '700',
   },
   dropdownOverlay: {
     position: 'absolute',
@@ -769,67 +1257,171 @@ const styles = StyleSheet.create({
     width: '100%',
     borderRadius: 16,
     backgroundColor: '#FFFFFF',
-    padding: 16,
+    overflow: 'hidden',
     borderWidth: 1,
     borderColor: BORDER,
+    height: '84%',
+    maxHeight: '84%',
   },
-  modalHeader: {
+  detailHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingTop: 14,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: BORDER,
   },
-  detailIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: '#ECFDF5',
+  detailHeaderTitle: {
+    flex: 1,
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#111827',
+    paddingRight: 10,
+  },
+  detailHeaderClose: {
+    width: 40,
+    height: 40,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  detailIcon: { width: 18, height: 18, tintColor: GREEN },
-  closeBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: CARD_BG,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: BORDER,
+  detailHeaderCloseText: {
+    fontSize: 22,
+    lineHeight: 22,
+    color: MUTED,
   },
-  closeText: { fontSize: 22, lineHeight: 22, color: '#111827' },
-  detailHeaderBlock: { marginTop: 12, marginBottom: 12 },
-  detailTitle: { fontSize: 18, fontWeight: '900', color: '#111827' },
-  detailTime: { fontSize: 12, color: '#9CA3AF', marginTop: 6 },
-  detailPanel: {
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: CARD_BG,
-    padding: 12,
+  detailScroll: {
+    paddingHorizontal: 18,
+    paddingTop: 12,
+    paddingBottom: 10,
   },
-  panelLabel: { fontSize: 12, color: MUTED, fontWeight: '700' },
-  panelBody: { marginTop: 6 },
-  detailBody: { fontSize: 14, color: '#111827', lineHeight: 20 },
-  detailActions: {
+  detailScrollView: {
+    flex: 1,
+  },
+  receivedRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 14,
+    gap: 12,
+    marginBottom: 14,
   },
-  markBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+  receivedIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  receivedIcon: {
+    width: 22,
+    height: 22,
+  },
+  receivedCheck: {
+    fontSize: 22,
+    lineHeight: 22,
+    color: '#16A34A',
+    fontWeight: '900',
+  },
+  receivedLabel: {
+    fontSize: 12,
+    color: MUTED,
+    fontWeight: '700',
+  },
+  receivedValue: {
+    marginTop: 2,
+    fontSize: 14,
+    color: '#111827',
+    fontWeight: '800',
+  },
+  detailContent: {
+    paddingBottom: 6,
+  },
+  detailKV: {
+    marginTop: 10,
+  },
+  detailK: {
+    fontSize: 12,
+    color: MUTED,
+  },
+  detailV: {
+    marginTop: 4,
+    fontSize: 15,
+    color: '#111827',
+    fontWeight: '800',
+    lineHeight: 20,
+  },
+  detailVBody: {
+    marginTop: 4,
+    fontSize: 15,
+    color: '#111827',
+    fontWeight: '400',
+    lineHeight: 20,
+  },
+  detailOutlineBox: {
+    marginTop: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: BORDER,
+    padding: 12,
+    backgroundColor: 'transparent',
+  },
+  detailOutlineText: {
+    fontSize: 15,
+    color: '#111827',
+    fontWeight: '400',
+    lineHeight: 20,
+  },
+  detailBox: {
+    borderRadius: 10,
+    borderWidth: 1,
+    padding: 12,
+    marginTop: 10,
+  },
+  detailBoxDanger: {
+    borderColor: '#FCA5A5',
+    backgroundColor: '#FEF2F2',
+  },
+  detailBoxSuccess: {
+    borderColor: '#86EFAC',
+    backgroundColor: '#F0FDF4',
+  },
+  detailBoxInfo: {
+    borderColor: '#93C5FD',
+    backgroundColor: '#EFF6FF',
+  },
+  detailBoxLabel: {
+    fontSize: 12,
+    color: MUTED,
+  },
+  detailBoxValue: {
+    marginTop: 4,
+    fontSize: 15,
+    color: '#111827',
+    fontWeight: '800',
+    lineHeight: 20,
+  },
+  detailStrike: {
+    textDecorationLine: 'line-through',
+  },
+  detailFooter: {
+    paddingHorizontal: 18,
+    paddingBottom: 12,
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: BORDER,
+  },
+  detailCloseBtn: {
+    height: 46,
     borderRadius: 12,
-    backgroundColor: GREEN,
+    backgroundColor: '#14B8A6',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  markBtnText: { color: '#FFFFFF', fontWeight: '800' },
-  okBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 12,
-    backgroundColor: '#111827',
+  detailCloseBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '900',
+    fontSize: 16,
   },
-  okBtnText: { color: '#FFFFFF', fontWeight: '800' },
   bottomNav: {
     flexDirection: 'row',
     justifyContent: 'space-around',

@@ -20,13 +20,14 @@ const GREEN = '#10B981';
 const BORDER = '#E5E7EB';
 const MUTED = '#6B7280';
 const CARD_BG = '#F9FAFB';
-const API_BASE = 'https://backend-careflow.vercel.app/api/profile';
+const API_BASE = 'https://backend-careflow.vercel.app';
 
 export default function DoctorProfile() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
+  const [specialty, setSpecialty] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
@@ -48,6 +49,14 @@ export default function DoctorProfile() {
     if (key === 'labstaff') return 'Lab Staff';
     return key.charAt(0).toUpperCase() + key.slice(1);
   };
+
+  const roleLine = useMemo(() => {
+    const r = String(role || '').trim();
+    if (r.toLowerCase() === 'doctor') {
+      return `Doctor${specialty ? `: ${specialty}` : ''}`;
+    }
+    return r;
+  }, [role, specialty]);
 
   const getUserId = React.useCallback(async (): Promise<string | null> => {
     try {
@@ -87,6 +96,7 @@ export default function DoctorProfile() {
       setName(data?.name || '');
       setEmail(data?.email || '');
       setRole(roleLabel(data?.role));
+      setSpecialty(data?.specialty || '');
       setPhone(data?.phone || '');
       setAddress(data?.address || '');
       setBirthdate(data?.birthdate || '');
@@ -109,6 +119,7 @@ export default function DoctorProfile() {
         full_name: data?.name || user.full_name,
         email: data?.email || user.email,
         role: data?.role || user.role,
+        specialty: data?.specialty ?? user.specialty,
         phone: data?.phone || user.phone,
         address: data?.address || user.address,
         birthdate: data?.birthdate || user.birthdate,
@@ -132,6 +143,7 @@ export default function DoctorProfile() {
       setName(user?.full_name || user?.fullName || user?.name || '');
       setEmail(user?.email || '');
       setRole(roleLabel(user?.role));
+      setSpecialty(user?.specialty || '');
       setPhone(user?.phone || '');
       setAddress(user?.address || '');
       setBirthdate(user?.birthdate || '');
@@ -271,7 +283,7 @@ export default function DoctorProfile() {
                     <Text style={styles.editLink}>Edit</Text>
                   </TouchableOpacity>
                 </View>
-                <Text style={styles.role}>{role}</Text>
+                <Text style={styles.role}>{roleLine}</Text>
               </View>
             </View>
 
@@ -286,6 +298,10 @@ export default function DoctorProfile() {
               <View style={styles.kvRow}>
                 <Text style={styles.kvLabel}>Role</Text>
                 <Text style={styles.kvValue}>: {role || '—'}</Text>
+              </View>
+              <View style={styles.kvRow}>
+                <Text style={styles.kvLabel}>Specialty</Text>
+                <Text style={styles.kvValue}>: {specialty || '—'}</Text>
               </View>
               <View style={styles.kvRow}>
                 <Text style={styles.kvLabel}>Email</Text>

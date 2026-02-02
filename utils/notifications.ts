@@ -1,9 +1,23 @@
 /// <reference path="../types/notifee.d.ts" />
-import notifee, { AndroidImportance, TimestampTrigger, TriggerType } from '@notifee/react-native';
+import notifee, {
+  AndroidImportance,
+  TimestampTrigger,
+  TriggerType,
+} from '@notifee/react-native';
 
 export async function initNotifications() {
   try {
     await notifee.requestPermission();
+  } catch {}
+  try {
+    await notifee.createChannel({
+      id: 'careflow-notifications',
+      name: 'Notifications',
+      lights: true,
+      vibration: true,
+      importance: AndroidImportance.HIGH,
+      sound: 'default',
+    });
   } catch {}
   try {
     await notifee.createChannel({
@@ -27,9 +41,10 @@ export async function scheduleAppointmentNotifications(
   patient: string,
   date: string,
   time: string,
-  opts?: { near?: boolean; now?: boolean; customMinutes?: number }
+  opts?: { near?: boolean; now?: boolean; customMinutes?: number },
 ) {
-  const keyBase = (apptId != null ? `id_${apptId}` : toKeyBase(patient, date, time));
+  const keyBase =
+    apptId != null ? `id_${apptId}` : toKeyBase(patient, date, time);
   const [hhmm, ap] = (time || '').split(' ');
   const [hhStr, mmStr] = (hhmm || '').split(':');
   const hh = Number(hhStr);
@@ -43,33 +58,52 @@ export async function scheduleAppointmentNotifications(
 
   const doNear = opts?.near ?? true;
   const doNow = opts?.now ?? true;
-  const custom = (opts?.customMinutes && Number.isFinite(opts.customMinutes) && opts.customMinutes! > 0) ? Math.floor(opts.customMinutes!) : undefined;
+  const custom =
+    opts?.customMinutes &&
+    Number.isFinite(opts.customMinutes) &&
+    opts.customMinutes! > 0
+      ? Math.floor(opts.customMinutes!)
+      : undefined;
 
   // Near (T - 30m)
   if (doNear && near > nowTs) {
-    const trigger: TimestampTrigger = { type: TriggerType.TIMESTAMP, timestamp: near, alarmManager: { allowWhileIdle: true } };
+    const trigger: TimestampTrigger = {
+      type: TriggerType.TIMESTAMP,
+      timestamp: near,
+      alarmManager: { allowWhileIdle: true },
+    };
     await notifee.createTriggerNotification(
       {
         id: `${keyBase}-near`,
         title: 'Appointment Starting Soon',
         body: `Appointment for ${patient} at ${time} is starting soon.`,
-        android: { channelId: 'doctor-reminders', pressAction: { id: 'default' } },
+        android: {
+          channelId: 'doctor-reminders',
+          pressAction: { id: 'default' },
+        },
       },
-      trigger
+      trigger,
     );
   }
 
   // At time (T)
   if (doNow && at > nowTs) {
-    const triggerNow: TimestampTrigger = { type: TriggerType.TIMESTAMP, timestamp: at, alarmManager: { allowWhileIdle: true } };
+    const triggerNow: TimestampTrigger = {
+      type: TriggerType.TIMESTAMP,
+      timestamp: at,
+      alarmManager: { allowWhileIdle: true },
+    };
     await notifee.createTriggerNotification(
       {
         id: `${keyBase}-now`,
         title: 'Appointment Reminder',
         body: `Appointment for ${patient} is now at ${time}.`,
-        android: { channelId: 'doctor-reminders', pressAction: { id: 'default' } },
+        android: {
+          channelId: 'doctor-reminders',
+          pressAction: { id: 'default' },
+        },
       },
-      triggerNow
+      triggerNow,
     );
   }
 
@@ -77,39 +111,73 @@ export async function scheduleAppointmentNotifications(
   if (typeof custom === 'number') {
     const ts = at - custom * 60 * 1000;
     if (ts > nowTs) {
-      const triggerCustom: TimestampTrigger = { type: TriggerType.TIMESTAMP, timestamp: ts, alarmManager: { allowWhileIdle: true } };
+      const triggerCustom: TimestampTrigger = {
+        type: TriggerType.TIMESTAMP,
+        timestamp: ts,
+        alarmManager: { allowWhileIdle: true },
+      };
       await notifee.createTriggerNotification(
         {
           id: `${keyBase}-m${custom}`,
           title: 'Appointment Reminder',
-          body: `Appointment for ${patient} is in ${custom} minute${custom === 1 ? '' : 's'} at ${time}.`,
-          android: { channelId: 'doctor-reminders', pressAction: { id: 'default' } },
+          body: `Appointment for ${patient} is in ${custom} minute${
+            custom === 1 ? '' : 's'
+          } at ${time}.`,
+          android: {
+            channelId: 'doctor-reminders',
+            pressAction: { id: 'default' },
+          },
         },
-        triggerCustom
+        triggerCustom,
       );
     }
   }
 }
 
-export async function cancelAppointmentNotifications(apptId: string | number | null | undefined, patient: string, date: string, time: string) {
-  const keyBase = (apptId != null ? `id_${apptId}` : toKeyBase(patient, date, time));
-  try { await notifee.cancelNotification(`${keyBase}-near`); } catch {}
-  try { await notifee.cancelNotification(`${keyBase}-now`); } catch {}
+export async function cancelAppointmentNotifications(
+  apptId: string | number | null | undefined,
+  patient: string,
+  date: string,
+  time: string,
+) {
+  const keyBase =
+    apptId != null ? `id_${apptId}` : toKeyBase(patient, date, time);
+  try {
+    await notifee.cancelNotification(`${keyBase}-near`);
+  } catch {}
+  try {
+    await notifee.cancelNotification(`${keyBase}-now`);
+  } catch {}
 }
 
-export async function cancelAppointmentCustomNotification(apptId: string | number | null | undefined, patient: string, date: string, time: string, minutes: number) {
-  const keyBase = (apptId != null ? `id_${apptId}` : toKeyBase(patient, date, time));
-  try { await notifee.cancelNotification(`${keyBase}-m${Math.floor(minutes)}`); } catch {}
+export async function cancelAppointmentCustomNotification(
+  apptId: string | number | null | undefined,
+  patient: string,
+  date: string,
+  time: string,
+  minutes: number,
+) {
+  const keyBase =
+    apptId != null ? `id_${apptId}` : toKeyBase(patient, date, time);
+  try {
+    await notifee.cancelNotification(`${keyBase}-m${Math.floor(minutes)}`);
+  } catch {}
 }
 
 // Display an immediate local notification (for generic events)
-export async function showLocalImmediateNotification(title: string, body: string) {
+export async function showLocalImmediateNotification(
+  title: string,
+  body: string,
+) {
   try {
     await notifee.displayNotification({
       id: `immediate-${Date.now()}`,
       title,
       body,
-      android: { channelId: 'doctor-reminders', pressAction: { id: 'default' } },
+      android: {
+        channelId: 'careflow-notifications',
+        pressAction: { id: 'default' },
+      },
     });
   } catch {}
 }

@@ -68,10 +68,22 @@ export default function LoginScreen({ navigation }: Props) {
 
       if (data.success) {
         const role = data.user.role.toLowerCase();
+        const token =
+          data?.token ||
+          data?.accessToken ||
+          data?.access_token ||
+          data?.user?.token ||
+          data?.user?.accessToken ||
+          data?.user?.access_token;
         try {
           await AsyncStorage.setItem(
             'session',
-            JSON.stringify({ role, user: data.user }),
+            JSON.stringify({
+              role,
+              token,
+              accessToken: token,
+              user: data.user,
+            }),
           );
         } catch (e) {
           // ignore storage errors

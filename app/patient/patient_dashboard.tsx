@@ -44,6 +44,7 @@ const PatientDashboard = () => {
   const [userName, setUserName] = useState('');
   const [userRole, setUserRole] = useState('Patient');
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [upcomingAppointments, setUpcomingAppointments] = useState<
     Appointment[]
   >([]);
@@ -103,6 +104,54 @@ const PatientDashboard = () => {
       return { 'Content-Type': 'application/json' } as Record<string, string>;
     }
   }, []);
+
+  const syncUnread = React.useCallback(async () => {
+    try {
+      const rawLocal = await AsyncStorage.getItem('patient_notifications');
+      const localArr: any[] = rawLocal ? JSON.parse(rawLocal) : [];
+      const byId: Record<string, any> = {};
+      if (Array.isArray(localArr)) {
+        for (const it of localArr) {
+          if (it?.id) byId[String(it.id)] = it;
+        }
+      }
+
+      try {
+        const headers = await getAuthHeaders();
+        const res = await fetch(`${API_BASE}/api/notifications`, { headers });
+        if (res.ok) {
+          const rows = await res.json();
+          const mapped = Array.isArray(rows)
+            ? rows.map((n: any) => ({
+                id: String(n?.id),
+                title: String(n?.title || 'Notification'),
+                message: String(n?.message || ''),
+                timestamp: n?.created_at
+                  ? new Date(n.created_at).getTime()
+                  : Date.now(),
+                read: Boolean(n?.read) === true,
+              }))
+            : [];
+          for (const it of mapped) {
+            if (it?.id) byId[String(it.id)] = { ...byId[String(it.id)], ...it };
+          }
+        }
+      } catch {}
+
+      const merged = Object.values(byId)
+        .filter(Boolean)
+        .sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0));
+      try {
+        await AsyncStorage.setItem(
+          'patient_notifications',
+          JSON.stringify(merged),
+        );
+      } catch {}
+      setUnreadCount(merged.filter((n: any) => n && n.read === false).length);
+    } catch {
+      setUnreadCount(0);
+    }
+  }, [getAuthHeaders]);
 
   const getCurrentUserName = React.useCallback(async (): Promise<
     string | undefined
@@ -306,7 +355,7 @@ const PatientDashboard = () => {
         return tb - ta;
       });
 
-      setRecentRecords(combined.slice(0, 3));
+      setRecentRecords(combined.slice(0, 4));
     } catch {
       setRecentRecords([]);
     }
@@ -324,8 +373,9 @@ const PatientDashboard = () => {
       loadUserData();
       loadAppointments();
       loadMedicalRecords();
+      syncUnread();
       return () => {};
-    }, []),
+    }, [syncUnread]),
   );
 
   const renderAppointmentItem = ({ item }: { item: Appointment }) => {
@@ -339,28 +389,32 @@ const PatientDashboard = () => {
         activeOpacity={0.8}
         onPress={handleAppointmentPress}
       >
-        <View style={styles.appointmentInfoContainer}>
+        <View style={styles.appointmentHeaderRow}>
           <Text style={styles.doctorName}>{item.doctor}</Text>
-          <Text style={styles.specialty}>{item.specialty}</Text>
-          <View style={styles.timeContainer}>
-            <Text style={styles.dateTime}>
-              {item.date} • {item.time}
-            </Text>
-            <View
-              style={[
-                styles.statusBadge,
-                { backgroundColor: getStatusColor(item.status) },
-              ]}
-            >
-              <Text style={styles.statusText}>{item.status}</Text>
-            </View>
+          <View
+            style={[
+              styles.statusBadge,
+              { backgroundColor: getStatusColor(item.status) },
+            ]}
+          >
+            <Text style={styles.statusText}>{item.status}</Text>
           </View>
         </View>
+
+        <View style={styles.appointmentMetaRow}>
+          <Text style={styles.appointmentMetaIcon}>📅</Text>
+          <Text style={styles.appointmentMetaText}>{item.date}</Text>
+        </View>
+        <View style={styles.appointmentMetaRow}>
+          <Text style={styles.appointmentMetaIcon}>🕒</Text>
+          <Text style={styles.appointmentMetaText}>{item.time}</Text>
+        </View>
+
         <TouchableOpacity
-          style={styles.viewButton}
+          style={styles.viewDetailsButton}
           onPress={handleAppointmentPress}
         >
-          <Text style={styles.viewButtonText}>View</Text>
+          <Text style={styles.viewDetailsText}>View Details</Text>
         </TouchableOpacity>
       </TouchableOpacity>
     );
@@ -376,8 +430,25 @@ const PatientDashboard = () => {
         style={styles.recordItemContainer}
         onPress={handleRecordPress}
       >
-        <View style={styles.recordIcon}>
-          <Text style={styles.recordIconText}>{getRecordIcon(item.type)}</Text>
+        <View
+          style={[
+            styles.recordIcon,
+            getRecordIconSource(item.type) && {
+              backgroundColor: 'transparent',
+            },
+          ]}
+        >
+          {getRecordIconSource(item.type) ? (
+            <Image
+              source={getRecordIconSource(item.type) as any}
+              style={styles.recordIconImg}
+              resizeMode="contain"
+            />
+          ) : (
+            <Text style={styles.recordIconText}>
+              {getRecordIcon(item.type)}
+            </Text>
+          )}
         </View>
         <View style={styles.recordDetails}>
           <Text style={styles.recordTitle}>{item.title}</Text>
@@ -413,57 +484,20 @@ const PatientDashboard = () => {
     }
   };
 
+  const getRecordIconSource = (type: string) => {
+    switch (type) {
+      case 'prescription':
+        return require('../../assets/medicine_emoji.png');
+      case 'consultation':
+        return require('../../assets/consultation_emoji.png');
+      default:
+        return undefined;
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
       <View style={[styles.container, { paddingBottom: 70 }]}>
-        <View style={[styles.topHeader, { paddingTop: insets.top }]}>
-          <Image
-            source={require('../../assets/appicon.png')}
-            style={styles.topHeaderLogo}
-            resizeMode="contain"
-          />
-          <View style={styles.topHeaderIcons}>
-            <TouchableOpacity
-              style={styles.iconBtn}
-              onPress={() => navigation.navigate('PatientNotification')}
-            >
-              <View style={{ position: 'relative' }}>
-                <Image
-                  source={require('../../assets/notification_icon.png')}
-                  style={styles.topHeaderIconImg}
-                  resizeMode="contain"
-                />
-              </View>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.topProfileBtn}
-              onPress={() => setShowProfileMenu(true)}
-              activeOpacity={0.8}
-            >
-              <View style={styles.topProfileAvatar}>
-                <Text style={styles.topProfileAvatarText}>
-                  {String(userName || 'P')
-                    .charAt(0)
-                    .toUpperCase()}
-                </Text>
-              </View>
-              <View style={styles.topProfileTextCol}>
-                <Text style={styles.topProfileName} numberOfLines={1}>
-                  {String(userName || 'Patient')}
-                </Text>
-                <Text style={styles.topProfileRole} numberOfLines={1}>
-                  {String(userRole || 'Patient')}
-                </Text>
-              </View>
-              <Image
-                source={require('../../assets/dropdown.png')}
-                style={styles.topProfileChevron}
-                resizeMode="contain"
-              />
-            </TouchableOpacity>
-          </View>
-        </View>
-        <View style={styles.topDivider} />
         <ScrollView
           style={styles.scrollView}
           contentContainerStyle={{ paddingBottom: (insets?.bottom || 0) + 120 }}
@@ -478,143 +512,186 @@ const PatientDashboard = () => {
             />
           }
         >
-          {/* Header */}
-          <View style={styles.header}>
-            <View style={styles.headerLeft}>
-              <Text style={styles.greeting}>Hello,</Text>
-              <Text style={styles.userName}>{userName}</Text>
-            </View>
-          </View>
-
-          {/* Quick Actions */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Quick Actions</Text>
-            <View style={styles.quickActions}>
-              <TouchableOpacity
-                style={styles.actionCard}
-                onPress={() => navigation.navigate('Appointments')}
-              >
-                <View
-                  style={[styles.actionIcon, { backgroundColor: '#EFF6FF' }]}
-                >
-                  <Image
-                    source={require('../../assets/appointment_icon.png')}
-                    style={[styles.actionIconImg, { tintColor: '#3B82F6' }]}
-                    resizeMode="contain"
-                  />
-                </View>
-                <Text style={styles.actionText}>Appointment</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.actionCard}
-                onPress={() => navigation.navigate('MedicalRecords')}
-              >
-                <View
-                  style={[styles.actionIcon, { backgroundColor: '#F0FDF4' }]}
-                >
-                  <Image
-                    source={require('../../assets/records.png')}
-                    style={[styles.actionIconImg, { tintColor: '#10B981' }]}
-                    resizeMode="contain"
-                  />
-                </View>
-                <Text style={styles.actionText}>My Records</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* Upcoming Appointments */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Upcoming Appointments</Text>
-              <TouchableOpacity
-                onPress={() => navigation.navigate('Appointments')}
-              >
-                <Text style={styles.seeAll}>See All</Text>
-              </TouchableOpacity>
-            </View>
-
-            {upcomingAppointments.length > 0 ? (
-              <FlatList
-                data={upcomingAppointments}
-                renderItem={renderAppointmentItem}
-                keyExtractor={item => item.id}
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.appointmentList}
+          <View style={[styles.heroHeader, { paddingTop: insets.top + 16 }]}>
+            <View style={styles.heroTopRow}>
+              <Image
+                source={require('../../assets/appicon.png')}
+                style={styles.heroLogo}
+                resizeMode="contain"
               />
-            ) : (
-              <View style={styles.emptyState}>
-                <Text style={styles.emptyStateText}>
-                  No upcoming appointments
-                </Text>
+
+              <View style={styles.heroTopIcons}>
                 <TouchableOpacity
-                  style={styles.bookNowButton}
-                  onPress={() => navigation.navigate('BookAppointment')}
+                  style={styles.heroCircleBtn}
+                  onPress={() => navigation.navigate('PatientNotification')}
+                  activeOpacity={0.85}
                 >
-                  <Text style={styles.bookNowText}>Book Now</Text>
+                  <View style={{ position: 'relative' }}>
+                    <Image
+                      source={require('../../assets/notification_icon.png')}
+                      style={styles.heroCircleIcon}
+                      resizeMode="contain"
+                    />
+                    {unreadCount > 0 && (
+                      <View
+                        style={{
+                          position: 'absolute',
+                          right: -6,
+                          top: -6,
+                          minWidth: 14,
+                          height: 14,
+                          paddingHorizontal: 3,
+                          borderRadius: 7,
+                          backgroundColor: '#EF4444',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <Text
+                          style={{
+                            color: '#FFFFFF',
+                            fontSize: 9,
+                            fontWeight: '700',
+                          }}
+                        >
+                          {unreadCount > 99 ? '99+' : String(unreadCount)}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.heroProfileBtn}
+                  onPress={() => setShowProfileMenu(true)}
+                  activeOpacity={0.85}
+                >
+                  <View style={styles.heroCircleBtn}>
+                    <Text style={styles.heroCircleText}>
+                      {String(userName || 'P')
+                        .charAt(0)
+                        .toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={styles.heroProfileTextCol}>
+                    <Text style={styles.heroProfileName} numberOfLines={1}>
+                      {String(userName || 'Patient')}
+                    </Text>
+                    <Text style={styles.heroProfileRole} numberOfLines={1}>
+                      {String(userRole || 'Patient')}
+                    </Text>
+                  </View>
+                  <Image
+                    source={require('../../assets/dropdown.png')}
+                    style={styles.heroProfileChevron}
+                    resizeMode="contain"
+                  />
                 </TouchableOpacity>
               </View>
-            )}
-          </View>
-
-          {/* Recent Medical Records */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Recent Medical Records</Text>
-              <TouchableOpacity
-                onPress={() => navigation.navigate('MedicalRecords')}
-              >
-                <Text style={styles.seeAll}>See All</Text>
-              </TouchableOpacity>
             </View>
 
-            {recentRecords.length > 0 ? (
-              <View style={styles.recordsList}>
-                {recentRecords.map(record => (
+            <Text style={styles.heroTitle}>Dashboard</Text>
+          </View>
+
+          <View style={styles.contentCard}>
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Upcoming Appointments</Text>
+                <TouchableOpacity
+                  onPress={() => navigation.navigate('Appointments')}
+                >
+                  <Text style={styles.seeAll}>See All</Text>
+                </TouchableOpacity>
+              </View>
+
+              {upcomingAppointments.length > 0 ? (
+                <FlatList
+                  data={upcomingAppointments.slice(0, 2)}
+                  renderItem={renderAppointmentItem}
+                  keyExtractor={item => item.id}
+                  scrollEnabled={false}
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={styles.appointmentList}
+                />
+              ) : (
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyStateText}>
+                    No upcoming appointments
+                  </Text>
                   <TouchableOpacity
-                    key={record.id}
-                    style={styles.recordItemContainer}
-                    activeOpacity={0.8}
-                    onPress={() => navigation.navigate('MedicalRecords')}
+                    style={styles.bookNowButton}
+                    onPress={() => navigation.navigate('BookAppointment')}
                   >
-                    <View style={styles.recordIcon}>
-                      {record.type === 'consultation' ? (
-                        <Image
-                          source={require('../../assets/records.png')}
-                          style={[
-                            styles.recordIconImg,
-                            { tintColor: '#10B981' },
-                          ]}
-                          resizeMode="contain"
-                        />
-                      ) : (
-                        <Text style={styles.recordIconText}>
-                          {getRecordIcon(record.type)}
-                        </Text>
-                      )}
-                    </View>
-                    <View style={styles.recordDetails}>
-                      <Text style={styles.recordTitle}>{record.title}</Text>
-                      <Text style={styles.recordDate}>{record.date}</Text>
-                    </View>
+                    <Text style={styles.bookNowText}>Book Now</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Recent Medical Records</Text>
+                <TouchableOpacity
+                  onPress={() => navigation.navigate('MedicalRecords')}
+                >
+                  <Text style={styles.seeAll}>See All</Text>
+                </TouchableOpacity>
+              </View>
+
+              {recentRecords.length > 0 ? (
+                <View style={styles.recordsList}>
+                  {recentRecords.map(record => (
                     <TouchableOpacity
-                      style={styles.viewRecordButton}
+                      key={record.id}
+                      style={styles.recordItemContainer}
+                      activeOpacity={0.8}
                       onPress={() => navigation.navigate('MedicalRecords')}
                     >
-                      <Text style={styles.viewRecordText}>View</Text>
+                      <View
+                        style={[
+                          styles.recordIcon,
+                          getRecordIconSource(record.type) && {
+                            backgroundColor: 'transparent',
+                          },
+                        ]}
+                      >
+                        {getRecordIconSource(record.type) ? (
+                          <Image
+                            source={getRecordIconSource(record.type) as any}
+                            style={styles.recordIconImg}
+                            resizeMode="contain"
+                          />
+                        ) : (
+                          <Text style={styles.recordIconText}>
+                            {getRecordIcon(record.type)}
+                          </Text>
+                        )}
+                      </View>
+                      <View style={styles.recordDetails}>
+                        <Text style={styles.recordTitle} numberOfLines={1}>
+                          {record.title}
+                        </Text>
+                        <Text style={styles.recordDate} numberOfLines={1}>
+                          {record.date}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.viewRecordButton}
+                        onPress={() => navigation.navigate('MedicalRecords')}
+                      >
+                        <Text style={styles.viewRecordText}>View</Text>
+                      </TouchableOpacity>
                     </TouchableOpacity>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            ) : (
-              <View style={styles.emptyState}>
-                <Text style={styles.emptyStateText}>
-                  No medical records found
-                </Text>
-              </View>
-            )}
+                  ))}
+                </View>
+              ) : (
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyStateText}>
+                    No medical records found
+                  </Text>
+                </View>
+              )}
+            </View>
           </View>
         </ScrollView>
       </View>
@@ -730,14 +807,14 @@ function BottomItem({
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#FFFFFF' },
+  safe: { flex: 1, backgroundColor: '#F3F4F6' },
   container: {
     flex: 1,
-    backgroundColor: '#F9FAFB',
+    backgroundColor: '#F3F4F6',
   },
   scrollView: {
     flex: 1,
-    padding: 16,
+    padding: 0,
   },
   // Top Navigation (matches doctor top bar)
   topHeader: {
@@ -873,6 +950,91 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#111827',
   },
+  heroHeader: {
+    backgroundColor: '#10B981',
+    paddingHorizontal: 20,
+    paddingBottom: 28,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+  },
+  heroTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 18,
+  },
+  heroTopIcons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  heroLogo: {
+    width: 44,
+    height: 44,
+    tintColor: '#FFFFFF',
+  },
+  heroTitle: {
+    marginTop: 14,
+    color: '#FFFFFF',
+    fontSize: 24,
+    fontWeight: '800',
+  },
+  heroCircleBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroProfileBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  heroProfileTextCol: {
+    marginLeft: 10,
+    marginRight: 8,
+    maxWidth: 150,
+  },
+  heroProfileName: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  heroProfileRole: {
+    marginTop: 2,
+    color: 'rgba(255,255,255,0.80)',
+    fontWeight: '600',
+    fontSize: 12,
+  },
+  heroProfileChevron: {
+    width: 14,
+    height: 14,
+    tintColor: '#FFFFFF',
+    opacity: 0.9,
+  },
+  heroCircleText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  heroCircleIcon: {
+    width: 22,
+    height: 22,
+    tintColor: '#FFFFFF',
+  },
+  contentCard: {
+    marginTop: -22,
+    marginHorizontal: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+  },
   dropdownBtn: {
     marginLeft: 8,
     width: 24,
@@ -954,69 +1116,28 @@ const styles = StyleSheet.create({
   dropdownItem: { paddingVertical: 10, paddingHorizontal: 12 },
   dropdownText: { color: '#111827', fontWeight: '700' },
   menuDivider: { height: 1, backgroundColor: '#E5E7EB' },
-  quickActions: {
-    marginTop: 20,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  actionCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 16,
-    flex: 1,
-    marginHorizontal: 4,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  actionIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  actionIconText: {
-    fontSize: 24,
-  },
-  actionIconImg: {
-    width: 24,
-    height: 24,
-  },
-  actionText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#374151',
-    textAlign: 'center',
-  },
   appointmentList: {
-    paddingVertical: 8,
+    paddingVertical: 4,
   },
   appointmentCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    backgroundColor: '#ECFDF5',
+    borderRadius: 16,
     padding: 16,
-    width: 280,
-    marginRight: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    width: '100%',
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#D1FAE5',
   },
-  appointmentInfoContainer: {
-    flex: 1,
+  appointmentHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
   },
   doctorName: {
     fontSize: 16,
     fontWeight: '600',
     color: '#111827',
-    marginBottom: 4,
   },
   specialty: {
     fontSize: 14,
@@ -1043,41 +1164,46 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
   },
-  viewButton: {
-    marginTop: 12,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 8,
+  appointmentMetaRow: {
+    flexDirection: 'row',
     alignItems: 'center',
+    marginBottom: 6,
   },
-  viewButtonText: {
+  appointmentMetaIcon: {
+    fontSize: 14,
+    marginRight: 8,
+  },
+  appointmentMetaText: {
+    fontSize: 14,
+    color: '#374151',
+  },
+  viewDetailsButton: {
+    marginTop: 10,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#10B981',
+    borderRadius: 10,
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  viewDetailsText: {
     color: '#10B981',
-    fontWeight: '500',
+    fontWeight: '700',
   },
   recordsList: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 16,
+    padding: 12,
   },
   recordItemContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
-    borderRadius: 8,
+    borderRadius: 14,
     padding: 12,
     marginBottom: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 1,
-    borderBottomColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
   },
   recordIcon: {
     width: 40,

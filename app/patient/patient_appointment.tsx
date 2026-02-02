@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -37,13 +37,25 @@ type Appointment = {
   specialty: string;
   date: string;
   time: string;
-  status: 'upcoming' | 'completed' | 'cancelled';
+  status: 'pending' | 'upcoming' | 'completed' | 'cancelled';
+  notes?: string;
+};
+
+type ScheduleSlot = {
+  id: string;
+  doctorName: string;
+  doctorUserId?: string | number;
+  date: string;
+  time: string;
+  start_time?: string;
+  end_time?: string;
   notes?: string;
 };
 
 type DoctorOption = {
   id: string | number;
   full_name: string;
+  specialty?: string;
 };
 
 type TabType = 'upcoming' | 'history';
@@ -89,6 +101,7 @@ const PatientAppointment = () => {
   const [userName, setUserName] = useState('');
   const [userRole, setUserRole] = useState('Patient');
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [activeTab, setActiveTab] = useState<TabType>('upcoming');
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
@@ -97,12 +110,27 @@ const PatientAppointment = () => {
   const [doctorUserId, setDoctorUserId] = useState<string | number | undefined>(
     undefined,
   );
+  const [specialization, setSpecialization] = useState('');
+  const [showSpecializationPicker, setShowSpecializationPicker] =
+    useState(false);
+  const [scheduleDay, setScheduleDay] = useState('Monday');
+  const [showScheduleDayPicker, setShowScheduleDayPicker] = useState(false);
+  const [scheduleTime, setScheduleTime] = useState('');
+  const [showScheduleTimePicker, setShowScheduleTimePicker] = useState(false);
+  const [bookedSlotKeys, setBookedSlotKeys] = useState<string[]>([]);
+  const [scheduleSlots, setScheduleSlots] = useState<ScheduleSlot[]>([]);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [showSchedulePicker, setShowSchedulePicker] = useState(false);
+  const [selectedSchedule, setSelectedSchedule] = useState<ScheduleSlot | null>(
+    null,
+  );
   const [doctors, setDoctors] = useState<DoctorOption[]>([]);
   const [doctorsLoading, setDoctorsLoading] = useState(false);
   const [showDoctorPicker, setShowDoctorPicker] = useState(false);
   const [reason, setReason] = useState('');
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const refreshTimerRef = React.useRef<any>(null);
   const [showRemModal, setShowRemModal] = useState(false);
   const [remTarget, setRemTarget] = useState<{
     id?: string;
@@ -142,6 +170,54 @@ const PatientAppointment = () => {
       return { 'Content-Type': 'application/json' } as Record<string, string>;
     }
   }, []);
+
+  const syncUnread = React.useCallback(async () => {
+    try {
+      const rawLocal = await AsyncStorage.getItem('patient_notifications');
+      const localArr: any[] = rawLocal ? JSON.parse(rawLocal) : [];
+      const byId: Record<string, any> = {};
+      if (Array.isArray(localArr)) {
+        for (const it of localArr) {
+          if (it?.id) byId[String(it.id)] = it;
+        }
+      }
+
+      try {
+        const headers = await getAuthHeaders();
+        const res = await fetch(`${API_BASE}/api/notifications`, { headers });
+        if (res.ok) {
+          const rows = await res.json();
+          const mapped = Array.isArray(rows)
+            ? rows.map((n: any) => ({
+                id: String(n?.id),
+                title: String(n?.title || 'Notification'),
+                message: String(n?.message || ''),
+                timestamp: n?.created_at
+                  ? new Date(n.created_at).getTime()
+                  : Date.now(),
+                read: Boolean(n?.read) === true,
+              }))
+            : [];
+          for (const it of mapped) {
+            if (it?.id) byId[String(it.id)] = { ...byId[String(it.id)], ...it };
+          }
+        }
+      } catch {}
+
+      const merged = Object.values(byId)
+        .filter(Boolean)
+        .sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0));
+      try {
+        await AsyncStorage.setItem(
+          'patient_notifications',
+          JSON.stringify(merged),
+        );
+      } catch {}
+      setUnreadCount(merged.filter((n: any) => n && n.read === false).length);
+    } catch {
+      setUnreadCount(0);
+    }
+  }, [getAuthHeaders]);
 
   const getCurrentUserName = React.useCallback(async (): Promise<
     string | undefined
@@ -229,40 +305,304 @@ const PatientAppointment = () => {
     return `${hh}:${mm} ${ap}`;
   }, []);
 
-  const loadAppointments = React.useCallback(async () => {
-    setRefreshing(true);
-    try {
-      const headers = await getAuthHeaders();
-      const res = await fetch(`${API_BASE}/api/appointments`, { headers });
-      if (!res.ok) return;
-      const arr = await res.json();
-      const myName = await getCurrentUserName();
-      const myId = await getCurrentUserId();
-      const list = Array.isArray(arr) ? arr : [];
-      const mine = list.filter((a: any) => {
-        const pid = a?.patientId ?? a?.patient_id;
-        if (pid != null && myId != null) {
-          return String(pid) === String(myId);
-        }
-        return nameMatches(String(a?.patient || ''), String(myName || ''));
-      });
-      const mapped: Appointment[] = mine.map((a: any) => ({
-        id: String(
-          a?.id ?? `${a?.patient || ''}-${a?.date || ''}-${a?.time || ''}`,
-        ),
-        doctorName: String(a?.createdByName || a?.created_by_name || 'Doctor'),
-        specialty: String(a?.specialty || ''),
-        date: String(a?.date || ''),
-        time: String(a?.time || ''),
-        status: a?.done ? 'completed' : 'upcoming',
-        notes: String(a?.notes || ''),
-      }));
-      setAppointments(mapped);
-    } catch {
-    } finally {
-      setRefreshing(false);
+  const specializationOptions = useMemo(
+    () => [
+      'General Medicine',
+      'Family Medicine',
+      'Pediatrics',
+      'Internal Medicine',
+      'Obstetrics and Gynecology',
+      'Cardiology',
+      'Dermatology',
+      'Neurology',
+      'Orthopedics',
+      'Ophthalmology',
+      'ENT',
+      'Psychiatry',
+      'Radiology',
+      'Anesthesiology',
+      'Emergency Medicine',
+      'Surgery',
+      'Urology',
+      'Nephrology',
+      'Pulmonology',
+      'Gastroenterology',
+    ],
+    [],
+  );
+
+  const scheduleDayOptions = useMemo(
+    () => [
+      'Sunday',
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+    ],
+    [],
+  );
+
+  const minutesToTime12 = React.useCallback((mins: number) => {
+    const h24 = Math.floor(mins / 60);
+    const m = mins % 60;
+    const ap = h24 >= 12 ? 'PM' : 'AM';
+    const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+    const hh = String(h12).padStart(2, '0');
+    const mm = String(m).padStart(2, '0');
+    return `${hh}:${mm} ${ap}`;
+  }, []);
+
+  const time12ToMinutes = React.useCallback((t: string) => {
+    const raw = String(t || '').trim();
+    if (!raw) return null;
+    const parts = raw.split(' ');
+    const hhmm = parts[0] || '';
+    const ap = String(parts[1] || '').toUpperCase();
+    const [hhStr, mmStr] = hhmm.split(':');
+    const hh = Number(hhStr);
+    const mm = Number(mmStr);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+    const base = hh % 12;
+    const h24 = base + (ap === 'PM' ? 12 : 0);
+    return h24 * 60 + mm;
+  }, []);
+
+  const minutesToTimeCompact = React.useCallback((mins: number) => {
+    const h24 = Math.floor(mins / 60);
+    const m = mins % 60;
+    const ap = h24 >= 12 ? 'pm' : 'am';
+    const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+    const mm = String(m).padStart(2, '0');
+    return `${h12}:${mm}${ap}`;
+  }, []);
+
+  const getTimeRangeLabel = React.useCallback(
+    (startTime: string) => {
+      const startMins = time12ToMinutes(startTime);
+      if (startMins == null) return String(startTime || '');
+      const endMins = startMins + 30;
+      return `${minutesToTimeCompact(startMins)} - ${minutesToTimeCompact(
+        endMins,
+      )}`;
+    },
+    [minutesToTimeCompact, time12ToMinutes],
+  );
+
+  const scheduleTimeOptions = useMemo(() => {
+    const day = String(scheduleDay || 'Monday');
+    const isSat = day.toLowerCase() === 'saturday';
+    const start = 8 * 60;
+    const end = isSat ? 12 * 60 : 17 * 60;
+    const out: string[] = [];
+    for (let t = start; t + 30 <= end; t += 30) {
+      if (!isSat && t >= 12 * 60 && t < 13 * 60) continue;
+      out.push(minutesToTime12(t));
     }
-  }, [getAuthHeaders, getCurrentUserName, getCurrentUserId, nameMatches]);
+    return out;
+  }, [minutesToTime12, scheduleDay]);
+
+  const bookedSlotSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const k of bookedSlotKeys || []) {
+      const key = String(k || '').trim();
+      if (key) s.add(key);
+    }
+    return s;
+  }, [bookedSlotKeys]);
+
+  const availableScheduleTimeOptions = useMemo(() => {
+    const nextDateFor = (weekday: string, timeStr: string) => {
+      const map: Record<string, number> = {
+        sunday: 0,
+        monday: 1,
+        tuesday: 2,
+        wednesday: 3,
+        thursday: 4,
+        friday: 5,
+        saturday: 6,
+      };
+      const target = map[String(weekday || '').toLowerCase()] ?? 1;
+      const now = new Date();
+      const base = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate(),
+        0,
+        0,
+        0,
+        0,
+      );
+      const cur = base.getDay();
+      let delta = (target - cur + 7) % 7;
+      let d = new Date(base);
+      d.setDate(base.getDate() + delta);
+
+      // If booking for today, ensure selected time is still in the future; otherwise push to next week
+      try {
+        const [hhmm, ap] = String(timeStr || '').split(' ');
+        const [hhStr, mmStr] = String(hhmm || '').split(':');
+        const hh = Number(hhStr);
+        const mm = Number(mmStr);
+        if (Number.isFinite(hh) && Number.isFinite(mm)) {
+          const h24 = (hh % 12) + (String(ap).toUpperCase() === 'PM' ? 12 : 0);
+          const dt = new Date(
+            d.getFullYear(),
+            d.getMonth(),
+            d.getDate(),
+            h24,
+            mm,
+            0,
+            0,
+          );
+          if (delta === 0 && dt.getTime() <= now.getTime()) {
+            d = new Date(base);
+            d.setDate(base.getDate() + 7);
+          }
+        }
+      } catch {}
+      return d;
+    };
+
+    const day = String(scheduleDay || '').trim();
+    if (!day) return [];
+    return (scheduleTimeOptions || []).filter(t => {
+      const date = formatYmd(nextDateFor(day, String(t || '')));
+      const key = `${date}|${String(t || '')}`;
+      return !bookedSlotSet.has(key);
+    });
+  }, [bookedSlotSet, formatYmd, scheduleDay, scheduleTimeOptions]);
+
+  const filteredDoctors = useMemo(() => {
+    const spec = String(specialization || '')
+      .trim()
+      .toLowerCase();
+    if (!spec) return [];
+    return (doctors || []).filter(d => {
+      const docSpec = String(d?.specialty || '')
+        .trim()
+        .toLowerCase();
+      if (!docSpec) return false;
+      return docSpec === spec;
+    });
+  }, [doctors, specialization]);
+
+  const getNextDateForWeekday = React.useCallback(
+    (weekday: string, timeStr: string) => {
+      const map: Record<string, number> = {
+        sunday: 0,
+        monday: 1,
+        tuesday: 2,
+        wednesday: 3,
+        thursday: 4,
+        friday: 5,
+        saturday: 6,
+      };
+      const target = map[String(weekday || '').toLowerCase()] ?? 1;
+      const now = new Date();
+      const base = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate(),
+        0,
+        0,
+        0,
+        0,
+      );
+      const cur = base.getDay();
+      let delta = (target - cur + 7) % 7;
+      let d = new Date(base);
+      d.setDate(base.getDate() + delta);
+
+      // If booking for today, ensure selected time is still in the future; otherwise push to next week
+      try {
+        const [hhmm, ap] = String(timeStr || '').split(' ');
+        const [hhStr, mmStr] = String(hhmm || '').split(':');
+        const hh = Number(hhStr);
+        const mm = Number(mmStr);
+        if (Number.isFinite(hh) && Number.isFinite(mm)) {
+          const h24 = (hh % 12) + (String(ap).toUpperCase() === 'PM' ? 12 : 0);
+          const dt = new Date(
+            d.getFullYear(),
+            d.getMonth(),
+            d.getDate(),
+            h24,
+            mm,
+            0,
+            0,
+          );
+          if (delta === 0 && dt.getTime() <= now.getTime()) {
+            d = new Date(base);
+            d.setDate(base.getDate() + 7);
+          }
+        }
+      } catch {}
+      return d;
+    },
+    [],
+  );
+
+  const loadAppointments = React.useCallback(
+    async (opts?: { silent?: boolean }) => {
+      const silent = opts?.silent === true;
+      if (!silent) setRefreshing(true);
+      try {
+        const headers = await getAuthHeaders();
+        const res = await fetch(`${API_BASE}/api/appointments`, { headers });
+        if (!res.ok) {
+          if (!silent) {
+            Alert.alert(
+              'Error',
+              `Failed to load appointments (HTTP ${res.status}).`,
+            );
+          }
+          return;
+        }
+        const arr = await res.json();
+        const myName = await getCurrentUserName();
+        const myId = await getCurrentUserId();
+        const list = Array.isArray(arr) ? arr : [];
+        const mine = list.filter((a: any) => {
+          const pid =
+            a?.patientId ?? a?.patient_id ?? a?.patientID ?? a?.patientIdNumber;
+          if (pid != null && myId != null) {
+            return String(pid) === String(myId);
+          }
+
+          const patientName =
+            a?.patient ??
+            a?.patient_name ??
+            a?.patientName ??
+            a?.patient_full_name ??
+            a?.patientFullName;
+          return nameMatches(String(patientName || ''), String(myName || ''));
+        });
+        const mapped: Appointment[] = mine.map((a: any) => ({
+          id: String(
+            a?.id ?? `${a?.patient || ''}-${a?.date || ''}-${a?.time || ''}`,
+          ),
+          doctorName: String(
+            a?.createdByName || a?.created_by_name || a?.doctorName || 'Doctor',
+          ),
+          specialty: String(a?.specialty || ''),
+          date: String(a?.date || ''),
+          time: String(a?.time || ''),
+          status: a?.done
+            ? 'completed'
+            : String(a?.status || '').toLowerCase() === 'accepted'
+            ? 'upcoming'
+            : 'pending',
+          notes: String(a?.notes || ''),
+        }));
+        setAppointments(mapped);
+      } catch {
+      } finally {
+        if (!silent) setRefreshing(false);
+      }
+    },
+    [getAuthHeaders, getCurrentUserName, getCurrentUserId, nameMatches],
+  );
 
   React.useEffect(() => {
     if (!isModalVisible) return;
@@ -310,6 +650,8 @@ const PatientAppointment = () => {
           return String(full || '').trim();
         };
         const toId = (u: any) => u?.id ?? u?.user_id ?? u?.userId ?? u?.uid;
+        const toSpecialty = (u: any) =>
+          String(u?.specialty || u?.specialization || '').trim();
 
         const roleFiltered = list.filter((u: any) => {
           const r = String(u?.role || u?.role_name || u?.roleName || '')
@@ -323,11 +665,13 @@ const PatientAppointment = () => {
           .map((u: any) => {
             const full_name = toFullName(u);
             const id = toId(u);
+            const specialty = toSpecialty(u);
             const stableId =
               id != null && String(id).trim().length > 0 ? id : full_name;
             return {
               id: stableId,
               full_name,
+              specialty,
             } as DoctorOption;
           })
           .filter((x: DoctorOption) =>
@@ -340,9 +684,37 @@ const PatientAppointment = () => {
           if (!byId.has(key)) byId.set(key, opt);
         }
 
-        const finalOptions = Array.from(byId.values()).sort((a, b) =>
+        let finalOptions = Array.from(byId.values()).sort((a, b) =>
           String(a.full_name).localeCompare(String(b.full_name)),
         );
+
+        // Backfill doctor specialties if the list endpoint didn't include it
+        try {
+          const needIds = finalOptions
+            .filter(o => !String(o?.specialty || '').trim())
+            .map(o => o?.id)
+            .filter((id: any) => id != null && String(id).trim().length > 0);
+
+          if (needIds.length > 0) {
+            const details = await Promise.allSettled(
+              needIds.map((id: any) => tryFetch(`${API_BASE}/api/users/${id}`)),
+            );
+
+            const byIdDetails = new Map<string, any>();
+            for (let i = 0; i < needIds.length; i++) {
+              const r = details[i];
+              if (r.status === 'fulfilled') {
+                byIdDetails.set(String(needIds[i]), r.value);
+              }
+            }
+
+            finalOptions = finalOptions.map(o => {
+              const det = byIdDetails.get(String(o.id));
+              const spec = String(det?.specialty || '').trim();
+              return spec ? { ...o, specialty: spec } : o;
+            });
+          }
+        } catch {}
 
         setDoctors(finalOptions);
       } catch {
@@ -353,12 +725,212 @@ const PatientAppointment = () => {
     })();
   }, [getAuthHeaders, isModalVisible]);
 
+  const loadDoctorSchedules = React.useCallback(async () => {
+    try {
+      const docName = String(doctor || '').trim();
+      const docId = doctorUserId;
+      if (!docName && docId == null) {
+        setScheduleSlots([]);
+        setSelectedSchedule(null);
+        return;
+      }
+      setScheduleLoading(true);
+      const headers = await getAuthHeaders();
+      const qs =
+        docId != null && String(docId).trim().length > 0
+          ? `doctor_user_id=${encodeURIComponent(String(docId))}`
+          : `doctor_name=${encodeURIComponent(String(docName))}`;
+      const res = await fetch(
+        `${API_BASE}/api/schedule-slots?${qs}&available=1`,
+        { headers },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const arr = await res.json();
+      const list = Array.isArray(arr) ? arr : [];
+
+      const now = new Date();
+      const startToday = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate(),
+      );
+
+      const slots: ScheduleSlot[] = list
+        .filter((a: any) => {
+          const booked = Boolean(a?.is_booked);
+          const status = String(a?.status || '')
+            .toLowerCase()
+            .trim();
+          if (booked) return false;
+          if (status && status !== 'available' && status !== 'schedule')
+            return false;
+          return true;
+        })
+        .map((a: any) => {
+          const id = String(a?.id ?? `${a?.date || ''}-${a?.time || ''}`);
+          const date = String(a?.date || '');
+          const start_time = String(a?.start_time || a?.startTime || '').trim();
+          const end_time = String(a?.end_time || a?.endTime || '').trim();
+          const time =
+            start_time || String(a?.time || '').trim() || String(a?.time || '');
+          const doctorName = String(a?.doctor_name || a?.doctorName || docName);
+          const aDocId = a?.doctor_user_id ?? a?.doctorUserId;
+          return {
+            id,
+            doctorName: doctorName || docName,
+            doctorUserId: aDocId ?? docId,
+            date,
+            time,
+            start_time: start_time || undefined,
+            end_time: end_time || undefined,
+            notes: String(a?.notes || '').trim() || undefined,
+          } as ScheduleSlot;
+        })
+        .filter((s: ScheduleSlot) => {
+          try {
+            const [y, m, d] = String(s.date || '')
+              .split('-')
+              .map(Number);
+            if (
+              !Number.isFinite(y) ||
+              !Number.isFinite(m) ||
+              !Number.isFinite(d)
+            )
+              return true;
+            const dt = new Date(y, (m || 1) - 1, d || 1);
+            return dt >= startToday;
+          } catch {
+            return true;
+          }
+        })
+        .sort((a: ScheduleSlot, b: ScheduleSlot) =>
+          `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`),
+        );
+
+      setScheduleSlots(slots);
+
+      setSelectedSchedule(prev => {
+        if (!prev) return null;
+        const keep = slots.find(s => String(s.id) === String(prev.id));
+        return keep || null;
+      });
+    } catch {
+      setScheduleSlots([]);
+      setSelectedSchedule(null);
+    } finally {
+      setScheduleLoading(false);
+    }
+  }, [doctor, doctorUserId, getAuthHeaders, nameMatches]);
+
+  React.useEffect(() => {
+    if (!isModalVisible) return;
+    loadDoctorSchedules();
+  }, [doctor, doctorUserId, isModalVisible, loadDoctorSchedules]);
+
+  React.useEffect(() => {
+    if (!isModalVisible) return;
+    const docName = String(doctor || '').trim();
+    const docId = doctorUserId;
+    if (!docName && docId == null) {
+      setBookedSlotKeys([]);
+      return;
+    }
+
+    (async () => {
+      try {
+        const headers = await getAuthHeaders();
+        const res = await fetch(`${API_BASE}/api/appointments`, { headers });
+        if (!res.ok) return;
+        const arr = await res.json();
+        const list = Array.isArray(arr) ? arr : [];
+
+        const isRealBookedAppointment = (a: any) => {
+          if (Boolean(a?.done)) return false;
+
+          const status = String(a?.status || '')
+            .toLowerCase()
+            .trim();
+          // Only treat these as blocking a slot for booking
+          if (status !== 'pending' && status !== 'accepted') return false;
+
+          const isScheduleFlag =
+            a?.is_schedule === true || a?.isSchedule === true;
+          if (isScheduleFlag) return false;
+
+          const patient = String(a?.patient || '')
+            .trim()
+            .toLowerCase();
+          if (!patient) return false;
+          if (patient === 'available slot' || patient === 'available')
+            return false;
+
+          return true;
+        };
+
+        const matchesDoctor = (a: any) => {
+          const aDocId = a?.doctor_user_id ?? a?.doctorUserId;
+          if (docId != null && aDocId != null) {
+            return String(aDocId) === String(docId);
+          }
+          const createdBy = String(
+            a?.createdByName || a?.created_by_name || '',
+          );
+          if (docName && createdBy) return nameMatches(createdBy, docName);
+          return false;
+        };
+
+        const keys: string[] = [];
+        for (const a of list) {
+          if (!matchesDoctor(a)) continue;
+          if (!isRealBookedAppointment(a)) continue;
+          const date = String(a?.date || '').trim();
+          const time = String(a?.time || '').trim();
+          if (!date || !time) continue;
+          keys.push(`${date}|${time}`);
+        }
+
+        setBookedSlotKeys(Array.from(new Set(keys)));
+      } catch {
+        setBookedSlotKeys([]);
+      }
+    })();
+  }, [doctor, doctorUserId, getAuthHeaders, isModalVisible, nameMatches]);
+
+  React.useEffect(() => {
+    if (selectedSchedule) return;
+    const cur = String(scheduleTime || '').trim();
+    if (!cur) return;
+    if (!(availableScheduleTimeOptions || []).includes(cur)) {
+      setScheduleTime('');
+    }
+  }, [availableScheduleTimeOptions, scheduleTime, selectedSchedule]);
+
   useFocusEffect(
     React.useCallback(() => {
       loadAppointments();
       loadUserData();
-      return () => {};
-    }, [loadAppointments, loadUserData]),
+      syncUnread();
+      try {
+        if (refreshTimerRef.current) {
+          clearInterval(refreshTimerRef.current);
+          refreshTimerRef.current = null;
+        }
+      } catch {}
+      refreshTimerRef.current = setInterval(() => {
+        try {
+          loadAppointments({ silent: true });
+          syncUnread();
+        } catch {}
+      }, 8000);
+      return () => {
+        try {
+          if (refreshTimerRef.current) {
+            clearInterval(refreshTimerRef.current);
+            refreshTimerRef.current = null;
+          }
+        } catch {}
+      };
+    }, [loadAppointments, loadUserData, syncUnread]),
   );
 
   React.useEffect(() => {
@@ -367,6 +939,8 @@ const PatientAppointment = () => {
 
   React.useEffect(() => {
     if (route?.name === 'BookAppointment') {
+      setSelectedSchedule(null);
+      setScheduleSlots([]);
       setIsModalVisible(true);
     }
   }, []);
@@ -374,6 +948,13 @@ const PatientAppointment = () => {
   // Mock data - replace with actual data from your backend
 
   const handleAddAppointment = () => {
+    setSelectedSchedule(null);
+    setScheduleSlots([]);
+    setSpecialization('');
+    setScheduleDay('Monday');
+    setScheduleTime('');
+    setDoctor('');
+    setDoctorUserId(undefined);
     setIsModalVisible(true);
   };
 
@@ -382,27 +963,60 @@ const PatientAppointment = () => {
       const doc = String(doctor || '').trim();
       const docId = doctorUserId;
       const notes = String(reason || '').trim();
+      const spec = String(specialization || '').trim();
+      const day = String(scheduleDay || '').trim();
+      const tm = String(scheduleTime || '').trim();
       if (!doc) {
         Alert.alert('Validation', "Please enter the doctor's name.");
+        return;
+      }
+      if (!spec) {
+        Alert.alert('Validation', 'Please select a specialization.');
+        return;
+      }
+      if (!selectedSchedule) {
+        Alert.alert('Validation', 'Please select an available schedule slot.');
         return;
       }
       if (!notes) {
         Alert.alert('Validation', 'Please enter the reason for visit.');
         return;
       }
-      const date = formatYmd(selectedDate);
-      const time = formatTime12h(selectedTime);
+
+      const date = String(selectedSchedule?.date || '').trim();
+      const time = String(
+        selectedSchedule?.start_time || selectedSchedule?.time || '',
+      ).trim();
+      if (!date || !time) {
+        Alert.alert('Validation', 'Selected schedule slot is invalid.');
+        return;
+      }
+
+      const slotKey = `${date}|${time}`;
+      if (bookedSlotSet.has(slotKey)) {
+        Alert.alert(
+          'Not available',
+          'This time slot is already requested/booked. Please select another available time.',
+        );
+        return;
+      }
+
       const patientName = (await getCurrentUserName()) || 'Patient';
+      const patientId = await getCurrentUserId();
       const headers = await getAuthHeaders();
       const res = await fetch(`${API_BASE}/api/appointments`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
           patient: patientName,
+          patient_id: patientId,
+          patientId,
           date,
           time,
+          specialty: spec,
           notes,
           done: false,
+          status: 'pending',
           createdByName: doc,
           created_by_name: doc,
           doctorName: doc,
@@ -412,28 +1026,64 @@ const PatientAppointment = () => {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
+      let createdAppointment: any = null;
+      try {
+        createdAppointment = await res.json();
+      } catch {
+        createdAppointment = null;
+      }
+
+      // Mark schedule slot as booked (best-effort)
+      try {
+        if (selectedSchedule?.id) {
+          await fetch(
+            `${API_BASE}/api/schedule-slots/${encodeURIComponent(
+              String(selectedSchedule.id),
+            )}/book`,
+            {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({
+                appointmentId: createdAppointment?.id ?? null,
+              }),
+            },
+          );
+        }
+      } catch {}
+
       // Best-effort: notify the selected doctor via backend notifications endpoint (if supported)
       try {
-        const msgBase = `New appointment request from ${patientName} (${date} ${time}).`;
-        const message = notes ? `${msgBase} ${notes}` : msgBase;
+        const title = 'Appointment Request';
+        const message = `New appointment request from ${patientName} for ${date} ${time}. Reason: ${notes}`;
+        const payload: any = {
+          title,
+          message,
+          body: message,
+          recipientId: docId,
+          recipient_id: docId,
+          toId: docId,
+          to_id: docId,
+          recipientName: doc,
+          recipient_name: doc,
+          toName: doc,
+          to_name: doc,
+        };
+
         await fetch(`${API_BASE}/api/notifications`, {
           method: 'POST',
           headers,
-          body: JSON.stringify({
-            title: 'Appointment Request',
-            message,
-            toName: doc,
-            recipientName: doc,
-            doctorName: doc,
-            user_id: docId,
-            recipientId: docId,
-          }),
+          body: JSON.stringify(payload),
         });
       } catch {}
 
       setDoctor('');
       setDoctorUserId(undefined);
+      setScheduleSlots([]);
+      setSelectedSchedule(null);
       setReason('');
+      setSpecialization('');
+      setScheduleDay('Monday');
+      setScheduleTime('');
       setIsModalVisible(false);
       loadAppointments();
       if (Platform.OS === 'android') {
@@ -449,11 +1099,56 @@ const PatientAppointment = () => {
     }
   };
 
-  const filteredAppointments = appointments.filter(
-    appointment =>
-      (activeTab === 'upcoming' && appointment.status === 'upcoming') ||
-      (activeTab === 'history' && appointment.status === 'completed'),
-  );
+  const filteredAppointments = useMemo(() => {
+    const base = (appointments || []).filter(appointment => {
+      return (
+        (activeTab === 'upcoming' &&
+          (appointment.status === 'upcoming' ||
+            appointment.status === 'pending')) ||
+        (activeTab === 'history' && appointment.status === 'completed')
+      );
+    });
+
+    const toTs = (a: Appointment) => {
+      try {
+        const [y, m, d] = String(a?.date || '')
+          .split('-')
+          .map(Number);
+        const mins = time12ToMinutes(String(a?.time || ''));
+        if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d))
+          return null;
+        if (mins == null) return null;
+        return (
+          new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0).getTime() +
+          mins * 60 * 1000
+        );
+      } catch {
+        return null;
+      }
+    };
+
+    if (activeTab === 'upcoming') {
+      // nearest upcoming/pending first
+      return [...base].sort((a, b) => {
+        const ta = toTs(a);
+        const tb = toTs(b);
+        if (ta == null && tb == null) return 0;
+        if (ta == null) return 1;
+        if (tb == null) return -1;
+        return ta - tb;
+      });
+    }
+
+    // history: most recent completed first
+    return [...base].sort((a, b) => {
+      const ta = toTs(a);
+      const tb = toTs(b);
+      if (ta == null && tb == null) return 0;
+      if (ta == null) return 1;
+      if (tb == null) return -1;
+      return tb - ta;
+    });
+  }, [activeTab, appointments, time12ToMinutes]);
 
   const openReminder = (item: Appointment) => {
     setRemTarget({ id: item.id, date: item.date, time: item.time });
@@ -690,61 +1385,97 @@ const PatientAppointment = () => {
       onPress={() => openDetails(item)}
       style={styles.appointmentCard}
     >
-      <View style={styles.appointmentHeader}>
-        <Text style={styles.doctorName}>{item.doctorName}</Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+      <View style={styles.cardTopRow}>
+        <View style={styles.cardAvatar}>
+          <Text style={styles.cardAvatarText}>
+            {String(item.doctorName || 'D')
+              .trim()
+              .charAt(0)
+              .toUpperCase()}
+          </Text>
+        </View>
+        <View style={styles.cardTitleCol}>
+          <Text style={styles.cardTitle} numberOfLines={1}>
+            {String(item.doctorName || '').trim()}
+            {String(item.specialty || '').trim()
+              ? `: ${String(item.specialty || '').trim()}`
+              : ''}
+          </Text>
+        </View>
+        <View style={styles.cardRightCol}>
           {item.status === 'upcoming' && (
             <TouchableOpacity
               onPress={() => openReminder(item)}
-              style={{ marginRight: 8 }}
+              style={styles.reminderIconBtn}
               activeOpacity={0.7}
             >
               <Image
                 source={require('../../assets/notification_icon.png')}
-                style={{ width: 18, height: 18, tintColor: '#111827' }}
+                style={styles.reminderIconImg}
                 resizeMode="contain"
               />
             </TouchableOpacity>
           )}
           <View
             style={[
-              styles.statusBadge,
-              item.status === 'upcoming'
-                ? styles.statusUpcoming
-                : styles.statusCompleted,
+              styles.statusPill,
+              item.status === 'pending'
+                ? styles.statusPillPending
+                : item.status === 'upcoming'
+                ? styles.statusPillUpcoming
+                : styles.statusPillCompleted,
             ]}
           >
             <Text
               style={[
-                styles.statusText,
-                item.status === 'upcoming'
-                  ? styles.statusUpcomingText
-                  : styles.statusCompletedText,
+                styles.statusPillText,
+                item.status === 'pending'
+                  ? styles.statusPillPendingText
+                  : item.status === 'upcoming'
+                  ? styles.statusPillUpcomingText
+                  : styles.statusPillCompletedText,
               ]}
             >
-              {item.status === 'upcoming' ? 'Upcoming' : 'Completed'}
+              {item.status === 'pending'
+                ? 'Pending'
+                : item.status === 'upcoming'
+                ? 'Upcoming'
+                : 'Completed'}
             </Text>
           </View>
         </View>
       </View>
-      <Text style={styles.specialty}>
-        {item.specialty ? `${item.specialty} • ` : ''}
-        Date: {item.date}
-      </Text>
-      <Text style={styles.specialty}>Time: {item.time}</Text>
+
+      <View style={styles.dateTimeRow}>
+        <View style={styles.dateTimeItem}>
+          <Text style={styles.dateTimeIcon}>📅</Text>
+          <Text style={styles.dateTimeLabel}>Date:</Text>
+          <Text style={styles.dateTimeValue}>{item.date}</Text>
+        </View>
+        <View style={styles.dateTimeItem}>
+          <Text style={styles.dateTimeIcon}>🕒</Text>
+          <Text style={styles.dateTimeLabel}>Time:</Text>
+          <Text style={styles.dateTimeValue}>
+            {getTimeRangeLabel(String(item.time || ''))}
+          </Text>
+        </View>
+      </View>
+
       {item.status === 'upcoming' && (
-        <View style={styles.actionButtons}>
+        <View style={styles.cardActionsRow}>
           <TouchableOpacity
-            style={styles.cancelButton}
+            style={styles.cardCancelBtn}
             onPress={() => cancelAppointmentFromCard(item)}
+            activeOpacity={0.8}
           >
-            <Text style={styles.cancelButtonText}>Cancel</Text>
+            <Text style={styles.cardCancelText}>Cancel</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={styles.rescheduleButton}
+            style={styles.cardRescheduleBtn}
             onPress={() => openRescheduleFromCard(item)}
+            activeOpacity={0.8}
           >
-            <Text style={styles.rescheduleButtonText}>Reschedule</Text>
+            <Text style={styles.cardRescheduleText}>Reschedule</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -753,93 +1484,120 @@ const PatientAppointment = () => {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <View style={[styles.topHeader, { paddingTop: insets.top }]}>
-        <Image
-          source={require('../../assets/appicon.png')}
-          style={styles.topHeaderLogo}
-          resizeMode="contain"
-        />
-        <View style={styles.topHeaderIcons}>
-          <TouchableOpacity
-            style={styles.iconBtn}
-            onPress={() => navigation.navigate('PatientNotification')}
-          >
-            <View style={{ position: 'relative' }}>
+      <View style={styles.container}>
+        <View style={[styles.headerContainer, { paddingTop: insets.top }]}>
+          <Image
+            source={require('../../assets/appicon.png')}
+            style={styles.headerLogo}
+            resizeMode="contain"
+          />
+          <View style={styles.headerActions}>
+            <TouchableOpacity
+              style={styles.headerIconBtn}
+              onPress={() => navigation.navigate('PatientNotification')}
+              activeOpacity={0.8}
+            >
+              <View style={{ position: 'relative' }}>
+                <Image
+                  source={require('../../assets/notification_icon.png')}
+                  style={styles.headerIconImg}
+                  resizeMode="contain"
+                />
+                {unreadCount > 0 && (
+                  <View
+                    style={{
+                      position: 'absolute',
+                      right: -6,
+                      top: -6,
+                      minWidth: 14,
+                      height: 14,
+                      paddingHorizontal: 3,
+                      borderRadius: 7,
+                      backgroundColor: '#EF4444',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: '#FFFFFF',
+                        fontSize: 9,
+                        fontWeight: '700',
+                      }}
+                    >
+                      {unreadCount > 99 ? '99+' : String(unreadCount)}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.headerProfileBtn}
+              onPress={() => setShowProfileMenu(true)}
+              activeOpacity={0.85}
+            >
+              <View style={styles.headerProfileAvatar}>
+                <Text style={styles.headerProfileAvatarText}>
+                  {String(userName || 'P')
+                    .charAt(0)
+                    .toUpperCase()}
+                </Text>
+              </View>
+              <View style={styles.headerProfileTextCol}>
+                <Text style={styles.headerProfileName} numberOfLines={1}>
+                  {String(userName || 'Patient')}
+                </Text>
+                <Text style={styles.headerProfileRole} numberOfLines={1}>
+                  {String(userRole || 'Patient')}
+                </Text>
+              </View>
               <Image
-                source={require('../../assets/notification_icon.png')}
-                style={styles.topHeaderIconImg}
+                source={require('../../assets/dropdown.png')}
+                style={styles.headerProfileChevron}
                 resizeMode="contain"
               />
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.topProfileBtn}
-            onPress={() => setShowProfileMenu(true)}
-            activeOpacity={0.8}
-          >
-            <View style={styles.topProfileAvatar}>
-              <Text style={styles.topProfileAvatarText}>
-                {String(userName || 'P')
-                  .charAt(0)
-                  .toUpperCase()}
-              </Text>
-            </View>
-            <View style={styles.topProfileTextCol}>
-              <Text style={styles.topProfileName} numberOfLines={1}>
-                {String(userName || 'Patient')}
-              </Text>
-              <Text style={styles.topProfileRole} numberOfLines={1}>
-                {String(userRole || 'Patient')}
-              </Text>
-            </View>
-            <Image
-              source={require('../../assets/dropdown.png')}
-              style={styles.topProfileChevron}
-              resizeMode="contain"
-            />
-          </TouchableOpacity>
-        </View>
-      </View>
-      <View style={styles.topDivider} />
-      <View style={styles.container}>
-        <View style={styles.headerContainer}>
-          <Text style={styles.header}>Appointments</Text>
-          <TouchableOpacity
-            style={styles.addButton}
-            activeOpacity={0.8}
-            onPress={handleAddAppointment}
-          >
-            <Text style={styles.addButtonText}>+</Text>
-          </TouchableOpacity>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Tabs */}
-        <View style={styles.tabContainer}>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'upcoming' && styles.activeTab]}
-            onPress={() => setActiveTab('upcoming')}
-          >
-            <Text
-              style={[
-                styles.tabText,
-                activeTab === 'upcoming' && styles.activeTabText,
-              ]}
+        <View style={styles.tabsRow}>
+          <View style={styles.tabContainer}>
+            <TouchableOpacity
+              style={[styles.tab, activeTab === 'upcoming' && styles.activeTab]}
+              onPress={() => setActiveTab('upcoming')}
             >
-              Upcoming
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'history' && styles.activeTab]}
-            onPress={() => setActiveTab('history')}
-          >
-            <Text
-              style={[
-                styles.tabText,
-                activeTab === 'history' && styles.activeTabText,
-              ]}
+              <Text
+                style={[
+                  styles.tabText,
+                  activeTab === 'upcoming' && styles.activeTabText,
+                ]}
+              >
+                Appointments
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tab, activeTab === 'history' && styles.activeTab]}
+              onPress={() => setActiveTab('history')}
             >
-              History
-            </Text>
+              <Text
+                style={[
+                  styles.tabText,
+                  activeTab === 'history' && styles.activeTabText,
+                ]}
+              >
+                History
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <TouchableOpacity
+            style={styles.tabAddButton}
+            activeOpacity={0.8}
+            onPress={handleAddAppointment}
+          >
+            <Text style={styles.tabAddButtonText}>+</Text>
           </TouchableOpacity>
         </View>
 
@@ -859,7 +1617,8 @@ const PatientAppointment = () => {
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyText}>
-                No {activeTab} appointments found
+                No {activeTab === 'upcoming' ? 'appointments' : 'history'}{' '}
+                appointments found
               </Text>
             </View>
           }
@@ -883,15 +1642,96 @@ const PatientAppointment = () => {
             </View>
 
             <ScrollView style={styles.modalBody}>
+              <Text style={styles.label}>Specialization</Text>
+              <TouchableOpacity
+                style={styles.dateTimeInput}
+                activeOpacity={0.8}
+                onPress={() => setShowSpecializationPicker(true)}
+              >
+                <View style={styles.doctorSelectRow}>
+                  <Text style={styles.doctorSelectText}>
+                    {specialization || 'Select specialization'}
+                  </Text>
+                  <Image
+                    source={require('../../assets/dropdown.png')}
+                    style={styles.doctorSelectIcon}
+                    resizeMode="contain"
+                  />
+                </View>
+              </TouchableOpacity>
+
               <Text style={styles.label}>Doctor's Name</Text>
               <TouchableOpacity
                 style={styles.dateTimeInput}
                 activeOpacity={0.8}
-                onPress={() => setShowDoctorPicker(true)}
+                onPress={() => {
+                  if (!String(specialization || '').trim()) {
+                    Alert.alert(
+                      'Validation',
+                      'Please select a specialization first.',
+                    );
+                    return;
+                  }
+                  setShowDoctorPicker(true);
+                }}
               >
                 <View style={styles.doctorSelectRow}>
                   <Text style={styles.doctorSelectText}>
                     {doctor || 'Select doctor'}
+                  </Text>
+                  <Image
+                    source={require('../../assets/dropdown.png')}
+                    style={styles.doctorSelectIcon}
+                    resizeMode="contain"
+                  />
+                </View>
+              </TouchableOpacity>
+
+              <Text style={styles.label}>Schedule</Text>
+              <TouchableOpacity
+                style={styles.dateTimeInput}
+                activeOpacity={0.8}
+                onPress={() => {
+                  if (!String(doctor || '').trim() && doctorUserId == null) {
+                    Alert.alert('Validation', 'Please select a doctor first.');
+                    return;
+                  }
+                  setShowSchedulePicker(true);
+                }}
+              >
+                <View style={styles.doctorSelectRow}>
+                  <Text style={styles.doctorSelectText}>
+                    {selectedSchedule
+                      ? `${selectedSchedule.date} • ${selectedSchedule.time}`
+                      : 'Select schedule'}
+                  </Text>
+                  <Image
+                    source={require('../../assets/dropdown.png')}
+                    style={styles.doctorSelectIcon}
+                    resizeMode="contain"
+                  />
+                </View>
+              </TouchableOpacity>
+
+              <Text style={styles.label}>Time</Text>
+              <TouchableOpacity
+                style={styles.dateTimeInput}
+                activeOpacity={0.8}
+                onPress={() => {
+                  if (!String(doctor || '').trim() && doctorUserId == null) {
+                    Alert.alert('Validation', 'Please select a doctor first.');
+                    return;
+                  }
+                  setShowSchedulePicker(true);
+                }}
+              >
+                <View style={styles.doctorSelectRow}>
+                  <Text style={styles.doctorSelectText}>
+                    {selectedSchedule?.time
+                      ? getTimeRangeLabel(String(selectedSchedule.time))
+                      : scheduleTime
+                      ? getTimeRangeLabel(scheduleTime)
+                      : 'Select time'}
                   </Text>
                   <Image
                     source={require('../../assets/dropdown.png')}
@@ -931,6 +1771,133 @@ const PatientAppointment = () => {
       </Modal>
 
       <Modal
+        visible={showSpecializationPicker}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowSpecializationPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '70%' }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Specialization</Text>
+              <TouchableOpacity
+                onPress={() => setShowSpecializationPicker(false)}
+              >
+                <Text style={styles.closeButton}>×</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.modalBody}>
+              <FlatList
+                data={specializationOptions}
+                keyExtractor={item => String(item)}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={styles.doctorPickerItem}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      setSpecialization(String(item));
+                      setDoctor('');
+                      setDoctorUserId(undefined);
+                      setSelectedSchedule(null);
+                      setScheduleSlots([]);
+                      setShowSpecializationPicker(false);
+                    }}
+                  >
+                    <Text style={styles.doctorPickerItemText}>
+                      {String(item)}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showScheduleDayPicker}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowScheduleDayPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '70%' }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Day</Text>
+              <TouchableOpacity onPress={() => setShowScheduleDayPicker(false)}>
+                <Text style={styles.closeButton}>×</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.modalBody}>
+              <FlatList
+                data={scheduleDayOptions}
+                keyExtractor={item => String(item)}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={styles.schedulePickerItem}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      setScheduleDay(String(item));
+                      setScheduleTime('');
+                      setShowScheduleDayPicker(false);
+                    }}
+                  >
+                    <Text style={styles.schedulePickerItemText}>
+                      {String(item)}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showScheduleTimePicker}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowScheduleTimePicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '70%' }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Time</Text>
+              <TouchableOpacity
+                onPress={() => setShowScheduleTimePicker(false)}
+              >
+                <Text style={styles.closeButton}>×</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.modalBody}>
+              {availableScheduleTimeOptions.length > 0 ? (
+                <FlatList
+                  data={availableScheduleTimeOptions}
+                  keyExtractor={item => String(item)}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={styles.schedulePickerItem}
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        setScheduleTime(String(item));
+                        setShowScheduleTimePicker(false);
+                      }}
+                    >
+                      <Text style={styles.schedulePickerItemText}>
+                        {getTimeRangeLabel(String(item))}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                />
+              ) : (
+                <Text style={styles.scheduleHint}>No time options.</Text>
+              )}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
         visible={showDoctorPicker}
         animationType="fade"
         transparent={true}
@@ -947,9 +1914,9 @@ const PatientAppointment = () => {
             <View style={styles.modalBody}>
               {doctorsLoading ? (
                 <Text style={styles.scheduleHint}>Loading doctors...</Text>
-              ) : doctors.length > 0 ? (
+              ) : filteredDoctors.length > 0 ? (
                 <FlatList
-                  data={doctors}
+                  data={filteredDoctors}
                   keyExtractor={item => String(item.id)}
                   renderItem={({ item }) => (
                     <TouchableOpacity
@@ -958,6 +1925,8 @@ const PatientAppointment = () => {
                       onPress={() => {
                         setDoctor(String(item.full_name || ''));
                         setDoctorUserId(item.id);
+                        setSelectedSchedule(null);
+                        setScheduleSlots([]);
                         setShowDoctorPicker(false);
                       }}
                     >
@@ -968,7 +1937,101 @@ const PatientAppointment = () => {
                   )}
                 />
               ) : (
-                <Text style={styles.scheduleHint}>No doctors found.</Text>
+                <Text style={styles.scheduleHint}>
+                  No doctors found for this specialization.
+                </Text>
+              )}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showSchedulePicker}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowSchedulePicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '70%' }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Schedule</Text>
+              <TouchableOpacity onPress={() => setShowSchedulePicker(false)}>
+                <Text style={styles.closeButton}>×</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.modalBody}>
+              {scheduleLoading ? (
+                <Text style={styles.scheduleHint}>Loading schedules...</Text>
+              ) : scheduleSlots.length > 0 ? (
+                <FlatList
+                  data={scheduleSlots}
+                  keyExtractor={item => String(item.id)}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={styles.schedulePickerItem}
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        setSelectedSchedule(item);
+                        try {
+                          const [yy, mm, dd] = String(item?.date || '')
+                            .split('-')
+                            .map(Number);
+                          if (
+                            Number.isFinite(yy) &&
+                            Number.isFinite(mm) &&
+                            Number.isFinite(dd)
+                          ) {
+                            const dt = new Date(yy, (mm || 1) - 1, dd || 1);
+                            const dow = dt.getDay();
+                            const names = [
+                              'Sunday',
+                              'Monday',
+                              'Tuesday',
+                              'Wednesday',
+                              'Thursday',
+                              'Friday',
+                              'Saturday',
+                            ];
+                            const nm = String(names[dow] || 'Monday');
+                            setScheduleDay(nm);
+                          }
+                        } catch {}
+
+                        try {
+                          const tt = String(
+                            item?.start_time ||
+                              item?.startTime ||
+                              item?.time ||
+                              '',
+                          ).trim();
+                          if (tt) setScheduleTime(tt);
+                        } catch {}
+                        setShowSchedulePicker(false);
+                      }}
+                    >
+                      <Text style={styles.schedulePickerItemText}>
+                        {item.date} •{' '}
+                        {String(item.start_time || '').trim() &&
+                        String(item.end_time || '').trim()
+                          ? `${String(item.start_time)} - ${String(
+                              item.end_time,
+                            )}`
+                          : String(item.time)}
+                      </Text>
+                      {!!item.notes && (
+                        <Text
+                          style={styles.schedulePickerItemSubText}
+                          numberOfLines={2}
+                        >
+                          {item.notes}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  )}
+                />
+              ) : (
+                <Text style={styles.scheduleHint}>No schedules available.</Text>
               )}
             </View>
           </View>
@@ -1012,7 +2075,13 @@ const PatientAppointment = () => {
                 <View style={styles.infoRow}>
                   <Text style={styles.infoKey}>Status</Text>
                   <Text style={styles.infoVal}>
-                    {detailsTarget?.status || '—'}
+                    {detailsTarget?.status === 'pending'
+                      ? 'Pending'
+                      : detailsTarget?.status === 'upcoming'
+                      ? 'Upcoming'
+                      : detailsTarget?.status === 'completed'
+                      ? 'Completed'
+                      : detailsTarget?.status || '—'}
                   </Text>
                 </View>
                 <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
@@ -1331,23 +2400,24 @@ const PatientAppointment = () => {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F3F4F6',
+  },
+  container: {
+    flex: 1,
+    padding: 16,
+    backgroundColor: '#F3F4F6',
   },
   topHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 8,
     backgroundColor: '#FFFFFF',
-    marginTop: 8,
+    paddingHorizontal: 16,
+    marginHorizontal: -16,
   },
   topHeaderLogo: { width: 40, height: 40 },
-  topHeaderIcons: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
+  topHeaderIcons: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   iconBtn: { padding: 8 },
   topHeaderIconImg: { width: 20, height: 20, tintColor: '#10B981' },
   topProfileBtn: {
@@ -1391,22 +2461,79 @@ const styles = StyleSheet.create({
     height: 14,
     tintColor: '#111827',
   },
-  topDivider: { height: 1, backgroundColor: '#E5E7EB' },
-  container: {
-    flex: 1,
-    padding: 16,
-    backgroundColor: '#fff',
+  topDivider: {
+    height: 1,
+    backgroundColor: '#E5E7EB',
+    marginTop: 0,
+    marginHorizontal: -16,
   },
   headerContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 12,
   },
   header: {
     fontSize: 24,
     fontWeight: 'bold',
     color: '#2d3748',
+  },
+  headerLogo: {
+    width: 40,
+    height: 40,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  headerIconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerIconImg: { width: 20, height: 20, tintColor: '#111827' },
+  headerProfileBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  headerProfileAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#10B981',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerProfileAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  headerProfileTextCol: {
+    marginLeft: 10,
+    marginRight: 8,
+    maxWidth: 140,
+  },
+  headerProfileName: {
+    color: '#111827',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  headerProfileRole: {
+    marginTop: 2,
+    color: '#6B7280',
+    fontWeight: '600',
+    fontSize: 12,
+  },
+  headerProfileChevron: {
+    width: 14,
+    height: 14,
+    tintColor: '#111827',
+    opacity: 0.9,
   },
   headerBookButton: {
     paddingHorizontal: 14,
@@ -1419,47 +2546,64 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   addButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: '#10B981',
     justifyContent: 'center',
     alignItems: 'center',
   },
   addButtonText: {
     color: '#ffffff',
-    fontSize: 24,
-    lineHeight: 28,
-    fontWeight: '300',
+    fontSize: 28,
+    lineHeight: 32,
+    fontWeight: '400',
     marginTop: -2,
   },
-  tabContainer: {
+  tabsRow: {
     flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
     marginBottom: 20,
-    backgroundColor: '#f1f5f9',
-    borderRadius: 10,
-    padding: 4,
+  },
+  tabContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    marginBottom: 0,
+    backgroundColor: 'transparent',
+    borderRadius: 14,
+    gap: 12,
+  },
+  tabAddButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#10B981',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tabAddButtonText: {
+    color: '#FFFFFF',
+    fontSize: 28,
+    lineHeight: 32,
+    fontWeight: '400',
+    marginTop: -2,
   },
   tab: {
     flex: 1,
-    paddingVertical: 10,
+    paddingVertical: 14,
     alignItems: 'center',
-    borderRadius: 8,
+    borderRadius: 14,
+    backgroundColor: '#E5E7EB',
   },
   activeTab: {
-    backgroundColor: '#ffffff',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#10B981',
   },
   tabText: {
     fontSize: 16,
-    color: '#64748b',
+    color: '#6B7280',
     fontWeight: '500',
   },
 
@@ -1471,24 +2615,131 @@ const styles = StyleSheet.create({
     paddingBottom: 20,
   },
   appointmentCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 14,
     shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 2,
   },
   appointmentHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 8,
+  },
+  cardTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  cardAvatar: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#D1FAE5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  cardAvatarText: {
+    color: '#065F46',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  cardTitleCol: { flex: 1 },
+  cardRightCol: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  cardSubtitle: {
+    marginTop: 2,
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  reminderIconBtn: {
+    padding: 6,
+    borderRadius: 16,
+    marginBottom: 6,
+  },
+  reminderIconImg: { width: 18, height: 18, tintColor: '#9CA3AF' },
+  statusPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  statusPillText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  statusPillUpcoming: { backgroundColor: '#ECFDF5' },
+  statusPillUpcomingText: { color: '#10B981' },
+  statusPillPending: { backgroundColor: '#FEF3C7' },
+  statusPillPendingText: { color: '#92400E' },
+  statusPillCompleted: { backgroundColor: '#F3F4F6' },
+  statusPillCompletedText: { color: '#111827' },
+  dateTimeRow: {
+    marginTop: 14,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  dateTimeItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  dateTimeIcon: { marginRight: 8, fontSize: 14 },
+  dateTimeLabel: {
+    color: '#111827',
+    fontSize: 12,
+    fontWeight: '700',
+    marginRight: 4,
+  },
+  dateTimeValue: {
+    color: '#111827',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  cardActionsRow: {
+    marginTop: 14,
+    flexDirection: 'row',
+    gap: 12,
+  },
+  cardCancelBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    backgroundColor: '#FEF2F2',
+    alignItems: 'center',
+  },
+  cardCancelText: {
+    color: '#DC2626',
+    fontWeight: '800',
+  },
+  cardRescheduleBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: '#10B981',
+    alignItems: 'center',
+  },
+  cardRescheduleText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
   },
   doctorName: {
     fontSize: 16,
@@ -1503,6 +2754,9 @@ const styles = StyleSheet.create({
   statusUpcoming: {
     backgroundColor: '#F3F4F6',
   },
+  statusPending: {
+    backgroundColor: '#FEF3C7',
+  },
   statusCompleted: {
     backgroundColor: '#dcfce7',
   },
@@ -1512,6 +2766,9 @@ const styles = StyleSheet.create({
   },
   statusUpcomingText: {
     color: '#111827',
+  },
+  statusPendingText: {
+    color: '#92400E',
   },
   statusCompletedText: {
     color: '#15803d',
@@ -1690,6 +2947,21 @@ const styles = StyleSheet.create({
   doctorPickerItemText: {
     fontSize: 14,
     color: '#111827',
+  },
+  schedulePickerItem: {
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  schedulePickerItemText: {
+    fontSize: 14,
+    color: '#111827',
+    fontWeight: '600',
+  },
+  schedulePickerItemSubText: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#64748b',
   },
   textArea: {
     minHeight: 100,

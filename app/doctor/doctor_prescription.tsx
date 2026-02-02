@@ -44,7 +44,13 @@ export default function DoctorPrescription() {
   const [quantity, setQuantity] = useState('');
   const [dosage, setDosage] = useState('');
   const [medicines, setMedicines] = useState<
-    { subject: string; quantity: string; dosage: string; expanded: boolean }[]
+    {
+      subject: string;
+      quantity: string;
+      dosage: string;
+      instruction?: string;
+      expanded: boolean;
+    }[]
   >([]);
   const [description, setDescription] = useState('');
   const [mode, setMode] = useState<'medicine' | 'lab'>('medicine');
@@ -52,27 +58,31 @@ export default function DoctorPrescription() {
   const [addMedSubject, setAddMedSubject] = useState('');
   const [addMedQuantity, setAddMedQuantity] = useState('');
   const [addMedDosage, setAddMedDosage] = useState('');
+  const [addMedInstruction, setAddMedInstruction] = useState('');
   const [showEditModal, setShowEditModal] = useState(false);
   const [editIndex, setEditIndex] = useState<number | null>(null);
   const [editMedSubject, setEditMedSubject] = useState('');
   const [editMedQuantity, setEditMedQuantity] = useState('');
   const [editMedDosage, setEditMedDosage] = useState('');
+  const [editMedInstruction, setEditMedInstruction] = useState('');
   const [inventoryOptions, setInventoryOptions] = useState<string[]>([]);
   const [showAddMedPicker, setShowAddMedPicker] = useState(false);
   const [showEditMedPicker, setShowEditMedPicker] = useState(false);
   const [labTests, setLabTests] = useState<
-    { subject: string; expanded: boolean }[]
+    { subject: string; category: string; expanded: boolean }[]
   >([]);
   const [showAddLabModal, setShowAddLabModal] = useState(false);
   const [addLabSubject, setAddLabSubject] = useState('');
+  const [addLabCategory, setAddLabCategory] = useState('');
   const [showEditLabModal, setShowEditLabModal] = useState(false);
   const [editLabIndex, setEditLabIndex] = useState<number | null>(null);
   const [editLabSubject, setEditLabSubject] = useState('');
+  const [editLabCategory, setEditLabCategory] = useState('');
   const [showAddLabPicker, setShowAddLabPicker] = useState(false);
   const [showEditLabPicker, setShowEditLabPicker] = useState(false);
   const isValid =
     mode === 'medicine'
-      ? [name, patient, description].every(v => v.trim().length > 0) &&
+      ? [name, patient].every(v => v.trim().length > 0) &&
         medicines.length > 0 &&
         medicines.every(
           m =>
@@ -82,7 +92,9 @@ export default function DoctorPrescription() {
         )
       : [name, patient].every(v => v.trim().length > 0) &&
         labTests.length > 0 &&
-        labTests.every(t => t.subject.trim().length > 0);
+        labTests.every(
+          t => t.subject.trim().length > 0 && t.category.trim().length > 0,
+        );
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [patients, setPatients] = useState<string[]>([]);
   const [showPatientPicker, setShowPatientPicker] = useState(false);
@@ -300,11 +312,46 @@ export default function DoctorPrescription() {
         !name ||
         !patient ||
         labTests.length === 0 ||
-        !labTests.every(t => t.subject.trim().length > 0)
+        !labTests.every(
+          t => t.subject.trim().length > 0 && t.category.trim().length > 0,
+        )
       ) {
         Alert.alert('Validation', 'Please fill out all required fields.');
         return;
       }
+      try {
+        const headers = await getAuthHeaders();
+        const postFirstOk = async (paths: string[], body: any) => {
+          for (const p of paths) {
+            try {
+              const res = await fetch(`${API_BASE}${p}`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(body),
+              });
+              if (res.ok) {
+                await res.json().catch(() => null);
+                return true;
+              }
+            } catch {}
+          }
+          return false;
+        };
+
+        for (const t of labTests) {
+          await postFirstOk(['/api/lab-tests', '/api/lab_tests'], {
+            patient,
+            patient_name: patient,
+            test: t.subject,
+            test_name: t.subject,
+            category: t.category,
+            notes: description,
+            doctor: name,
+            doctor_name: name,
+            status: 'new',
+          });
+        }
+      } catch {}
       try {
         const rawLab = await AsyncStorage.getItem('lab_orders');
         const arrLab = rawLab ? JSON.parse(rawLab) : [];
@@ -313,6 +360,7 @@ export default function DoctorPrescription() {
           id: String(nowTs + i),
           patient,
           test: t.subject,
+          category: t.category,
           notes: description,
           doctor: name,
           status: 'new',
@@ -327,7 +375,9 @@ export default function DoctorPrescription() {
         const nowTs2 = Date.now();
         const items = labTests.map((t, i) => ({
           id: String(nowTs2 + i),
-          title: `Lab order submitted: ${patient} • ${t.subject}`,
+          title: `Lab order submitted: ${patient} • ${t.subject}${
+            t.category ? ` (${t.category})` : ''
+          }`,
           type: 'lab',
           timestamp: Date.now(),
         }));
@@ -344,8 +394,8 @@ export default function DoctorPrescription() {
       return;
     }
 
-    if (!name || !patient || !description) {
-      Alert.alert('Validation', 'Please fill out all fields.');
+    if (!name || !patient) {
+      Alert.alert('Validation', 'Please fill out all required fields.');
       return;
     }
     if (
@@ -364,17 +414,42 @@ export default function DoctorPrescription() {
     try {
       const headers = await getAuthHeaders();
 
+      let doctorUserId: string | number | undefined;
+      try {
+        const raw = await AsyncStorage.getItem('session');
+        if (raw) {
+          const sess = JSON.parse(raw);
+          doctorUserId = sess?.user?.id ?? sess?.id ?? undefined;
+        }
+      } catch {}
+
       for (const m of medicines) {
+        const baseDesc = String(description || '').trim();
+        const instr = String(m?.instruction || '').trim();
+        const fullDesc = instr
+          ? baseDesc
+            ? `${baseDesc}\nInstruction: ${instr}`
+            : `Instruction: ${instr}`
+          : baseDesc;
         const res = await fetch(`${API_BASE}/api/prescription`, {
           method: 'POST',
           headers,
           body: JSON.stringify({
             patient_name: patient,
             doctor_name: name,
+            ...(doctorUserId != null
+              ? {
+                  doctor_id: doctorUserId,
+                  doctorId: doctorUserId,
+                  doctor_user_id: doctorUserId,
+                  doctorUserId: doctorUserId,
+                }
+              : {}),
             medicine: m.subject,
             quantity: Number(m.quantity),
             dosage_strength: m.dosage,
-            description,
+            description: fullDesc,
+            instruction: String(m.instruction || '').trim() || undefined,
           }),
         });
 
@@ -391,7 +466,7 @@ export default function DoctorPrescription() {
             subject: m.subject,
             quantity: m.quantity,
             dosageStrength: m.dosage,
-            description,
+            description: fullDesc,
           });
         } catch {}
 
@@ -404,7 +479,8 @@ export default function DoctorPrescription() {
             medicine: m.subject,
             quantity: Number(m.quantity),
             dosage: m.dosage,
-            notes: description,
+            instruction: String(m.instruction || '').trim() || undefined,
+            notes: fullDesc,
             status: 'new',
           };
           const next = [item, ...(Array.isArray(arr) ? arr : [])];
@@ -441,7 +517,8 @@ export default function DoctorPrescription() {
               doctor: name,
               medicine: m.subject,
               dosage: m.dosage,
-              notes: description,
+              notes: fullDesc,
+              instruction: String(m.instruction || '').trim() || undefined,
               date: null,
               time: null,
             }),
@@ -695,6 +772,14 @@ export default function DoctorPrescription() {
                           </Text>
                           <Text style={styles.detailsValue}>{m.dosage}</Text>
                         </View>
+                        {!!String(m.instruction || '').trim() && (
+                          <View style={styles.detailsRow}>
+                            <Text style={styles.detailsLabel}>Instruction</Text>
+                            <Text style={styles.detailsValue}>
+                              {String(m.instruction || '').trim()}
+                            </Text>
+                          </View>
+                        )}
 
                         <View style={styles.itemActions}>
                           <TouchableOpacity
@@ -705,6 +790,9 @@ export default function DoctorPrescription() {
                               setEditMedSubject(m.subject);
                               setEditMedQuantity(m.quantity);
                               setEditMedDosage(m.dosage);
+                              setEditMedInstruction(
+                                String(m.instruction || ''),
+                              );
                               setShowEditModal(true);
                             }}
                           >
@@ -747,9 +835,7 @@ export default function DoctorPrescription() {
                 ))}
 
                 <View style={styles.formGroup}>
-                  <Text style={styles.inputLabel}>
-                    Description <Text style={styles.required}>*</Text>
-                  </Text>
+                  <Text style={styles.inputLabel}>Description</Text>
                   <TextInput
                     placeholder="Provide details"
                     value={description}
@@ -813,6 +899,13 @@ export default function DoctorPrescription() {
                           <Text style={styles.detailsValue}>{t.subject}</Text>
                         </View>
 
+                        <View style={styles.detailsRow}>
+                          <Text style={styles.detailsLabel}>Category</Text>
+                          <Text style={styles.detailsValue}>
+                            {t.category || '—'}
+                          </Text>
+                        </View>
+
                         <View style={styles.itemActions}>
                           <TouchableOpacity
                             activeOpacity={0.85}
@@ -820,6 +913,7 @@ export default function DoctorPrescription() {
                             onPress={() => {
                               setEditLabIndex(idx);
                               setEditLabSubject(t.subject);
+                              setEditLabCategory(t.category);
                               setShowEditLabModal(true);
                             }}
                           >
@@ -978,6 +1072,18 @@ export default function DoctorPrescription() {
                 />
               </View>
 
+              <View style={styles.formGroup}>
+                <Text style={styles.inputLabel}>Instruction</Text>
+                <TextInput
+                  placeholder="e.g., Take after meals"
+                  value={addMedInstruction}
+                  onChangeText={setAddMedInstruction}
+                  style={[styles.input, styles.textArea]}
+                  placeholderTextColor="#9CA3AF"
+                  multiline
+                />
+              </View>
+
               <View style={styles.modalActions}>
                 <TouchableOpacity
                   activeOpacity={0.85}
@@ -987,6 +1093,7 @@ export default function DoctorPrescription() {
                     setAddMedSubject('');
                     setAddMedQuantity('');
                     setAddMedDosage('');
+                    setAddMedInstruction('');
                     setShowAddMedPicker(false);
                   }}
                 >
@@ -1010,6 +1117,8 @@ export default function DoctorPrescription() {
                         subject: addMedSubject.trim(),
                         quantity: addMedQuantity.trim(),
                         dosage: addMedDosage.trim(),
+                        instruction:
+                          String(addMedInstruction || '').trim() || undefined,
                         expanded: false,
                       },
                     ]);
@@ -1017,6 +1126,7 @@ export default function DoctorPrescription() {
                     setAddMedSubject('');
                     setAddMedQuantity('');
                     setAddMedDosage('');
+                    setAddMedInstruction('');
                     setShowAddMedPicker(false);
                   }}
                 >
@@ -1125,6 +1235,18 @@ export default function DoctorPrescription() {
                 />
               </View>
 
+              <View style={styles.formGroup}>
+                <Text style={styles.inputLabel}>Instruction</Text>
+                <TextInput
+                  placeholder="e.g., Take after meals"
+                  value={editMedInstruction}
+                  onChangeText={setEditMedInstruction}
+                  style={[styles.input, styles.textArea]}
+                  placeholderTextColor="#9CA3AF"
+                  multiline
+                />
+              </View>
+
               <View style={styles.modalActions}>
                 <TouchableOpacity
                   activeOpacity={0.85}
@@ -1132,6 +1254,7 @@ export default function DoctorPrescription() {
                   onPress={() => {
                     setShowEditModal(false);
                     setEditIndex(null);
+                    setEditMedInstruction('');
                     setShowEditMedPicker(false);
                   }}
                 >
@@ -1157,12 +1280,15 @@ export default function DoctorPrescription() {
                         subject: editMedSubject.trim(),
                         quantity: editMedQuantity.trim(),
                         dosage: editMedDosage.trim(),
+                        instruction:
+                          String(editMedInstruction || '').trim() || undefined,
                         expanded: false,
                       };
                       return copy;
                     });
                     setShowEditModal(false);
                     setEditIndex(null);
+                    setEditMedInstruction('');
                     setShowEditMedPicker(false);
                   }}
                 >
@@ -1240,6 +1366,19 @@ export default function DoctorPrescription() {
                 )}
               </View>
 
+              <View style={styles.formGroup}>
+                <Text style={styles.inputLabel}>
+                  Category <Text style={styles.required}>*</Text>
+                </Text>
+                <TextInput
+                  placeholder="e.g. Blood, Urine, Chemistry"
+                  value={addLabCategory}
+                  onChangeText={setAddLabCategory}
+                  style={styles.input}
+                  placeholderTextColor="#9CA3AF"
+                />
+              </View>
+
               <View style={styles.modalActions}>
                 <TouchableOpacity
                   activeOpacity={0.85}
@@ -1247,6 +1386,7 @@ export default function DoctorPrescription() {
                   onPress={() => {
                     setShowAddLabModal(false);
                     setAddLabSubject('');
+                    setAddLabCategory('');
                     setShowAddLabPicker(false);
                   }}
                 >
@@ -1256,16 +1396,21 @@ export default function DoctorPrescription() {
                   activeOpacity={0.85}
                   style={[styles.modalBtn, styles.modalBtnPrimary]}
                   onPress={() => {
-                    if (!addLabSubject.trim()) {
+                    if (!addLabSubject.trim() || !addLabCategory.trim()) {
                       Alert.alert('Validation', 'Please fill out all fields.');
                       return;
                     }
                     setLabTests(prev => [
                       ...prev,
-                      { subject: addLabSubject.trim(), expanded: false },
+                      {
+                        subject: addLabSubject.trim(),
+                        category: addLabCategory.trim(),
+                        expanded: false,
+                      },
                     ]);
                     setShowAddLabModal(false);
                     setAddLabSubject('');
+                    setAddLabCategory('');
                     setShowAddLabPicker(false);
                   }}
                 >
@@ -1343,6 +1488,19 @@ export default function DoctorPrescription() {
                 )}
               </View>
 
+              <View style={styles.formGroup}>
+                <Text style={styles.inputLabel}>
+                  Category <Text style={styles.required}>*</Text>
+                </Text>
+                <TextInput
+                  placeholder="e.g. Blood, Urine, Chemistry"
+                  value={editLabCategory}
+                  onChangeText={setEditLabCategory}
+                  style={styles.input}
+                  placeholderTextColor="#9CA3AF"
+                />
+              </View>
+
               <View style={styles.modalActions}>
                 <TouchableOpacity
                   activeOpacity={0.85}
@@ -1350,6 +1508,7 @@ export default function DoctorPrescription() {
                   onPress={() => {
                     setShowEditLabModal(false);
                     setEditLabIndex(null);
+                    setEditLabCategory('');
                     setShowEditLabPicker(false);
                   }}
                 >
@@ -1359,7 +1518,7 @@ export default function DoctorPrescription() {
                   activeOpacity={0.85}
                   style={[styles.modalBtn, styles.modalBtnPrimary]}
                   onPress={() => {
-                    if (!editLabSubject.trim()) {
+                    if (!editLabSubject.trim() || !editLabCategory.trim()) {
                       Alert.alert('Validation', 'Please fill out all fields.');
                       return;
                     }
@@ -1369,12 +1528,14 @@ export default function DoctorPrescription() {
                       copy[editLabIndex] = {
                         ...copy[editLabIndex],
                         subject: editLabSubject.trim(),
+                        category: editLabCategory.trim(),
                         expanded: false,
                       };
                       return copy;
                     });
                     setShowEditLabModal(false);
                     setEditLabIndex(null);
+                    setEditLabCategory('');
                     setShowEditLabPicker(false);
                   }}
                 >
