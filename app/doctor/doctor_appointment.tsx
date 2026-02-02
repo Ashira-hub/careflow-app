@@ -196,6 +196,72 @@ export default function DoctorAppointment() {
     setShowDetail(true);
   };
 
+  const openScheduleEdit = (slot: any) => {
+    try {
+      const id = slot?.id != null ? Number(slot.id) : null;
+      setEditingScheduleId(id);
+      setSeDate(String(slot?.date || '').trim());
+      setSeStartTime(String(slot?.start_time || slot?.time || '').trim());
+      setSeEndTime(String(slot?.end_time || '').trim());
+      setSeNotes(String(slot?.notes || '').trim());
+      const st = String(slot?.status || '')
+        .trim()
+        .toLowerCase();
+      setSeStatus(st === 'not available' ? 'not available' : 'available');
+      setShowScheduleEdit(true);
+    } catch {
+      setShowScheduleEdit(false);
+    }
+  };
+
+  const onSaveScheduleEdit = async () => {
+    if (!editingScheduleId) return setShowScheduleEdit(false);
+    const d = String(seDate || '').trim();
+    const st = String(seStartTime || '').trim();
+    const et = String(seEndTime || '').trim();
+    if (!d) return Alert.alert('Validation', 'Please select a date.');
+    if (!st) return Alert.alert('Validation', 'Please select a start time.');
+    if (!et) return Alert.alert('Validation', 'Please select an end time.');
+    const err = validateFutureDateTime(d, st);
+    if (err) return Alert.alert('Validation', err);
+    try {
+      const sm = time12ToMinutes(st);
+      const em = time12ToMinutes(et);
+      if (sm != null && em != null && em <= sm) {
+        return Alert.alert(
+          'Validation',
+          'End time must be later than start time.',
+        );
+      }
+    } catch {}
+
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(
+        `${API_BASE}/api/schedule-slots/${editingScheduleId}`,
+        {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify({
+            date: d,
+            start_time: st,
+            startTime: st,
+            end_time: et,
+            endTime: et,
+            status: seStatus,
+            notes: seNotes,
+          }),
+        },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await res.json();
+      await loadScheduleSlots();
+      setShowScheduleEdit(false);
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'Failed to update schedule slot');
+    }
+  };
+
   const onUpdateDetail = async () => {
     if (detailIndex === null) return setShowDetail(false);
     if (!dPatient)
@@ -409,6 +475,9 @@ export default function DoctorAppointment() {
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
   const [endTime, setEndTime] = useState('');
+  const [scheduleStatus, setScheduleStatus] = useState<
+    'available' | 'not available'
+  >('available');
   const [notes, setNotes] = useState('');
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
@@ -431,7 +500,9 @@ export default function DoctorAppointment() {
       done?: boolean;
     }>
   >([]);
-  const [pickerTarget, setPickerTarget] = useState<'new' | 'detail'>('new');
+  const [pickerTarget, setPickerTarget] = useState<
+    'new' | 'detail' | 'scheduleEdit'
+  >('new');
   const [timePickerField, setTimePickerField] = useState<'start' | 'end'>(
     'start',
   );
@@ -459,7 +530,37 @@ export default function DoctorAppointment() {
   const [dTime, setDTime] = useState('');
   const [dNotes, setDNotes] = useState('');
 
+  const [showScheduleEdit, setShowScheduleEdit] = useState(false);
+  const [editingScheduleId, setEditingScheduleId] = useState<number | null>(
+    null,
+  );
+  const [seDate, setSeDate] = useState('');
+  const [seStartTime, setSeStartTime] = useState('');
+  const [seEndTime, setSeEndTime] = useState('');
+  const [seNotes, setSeNotes] = useState('');
+  const [seStatus, setSeStatus] = useState<'available' | 'not available'>(
+    'available',
+  );
+
   const [showAllList, setShowAllList] = useState(false);
+  const [activeList, setActiveList] = useState<'appointments' | 'schedules'>(
+    'appointments',
+  );
+  const [expandedScheduleDays, setExpandedScheduleDays] = useState<
+    Record<string, boolean>
+  >({});
+  const [scheduleSlots, setScheduleSlots] = useState<
+    Array<{
+      id?: number;
+      date: string;
+      time?: string;
+      start_time?: string;
+      end_time?: string;
+      notes?: string;
+      status?: string;
+      is_booked?: boolean;
+    }>
+  >([]);
 
   const monthAbbr = (m: number) =>
     [
@@ -533,6 +634,7 @@ export default function DoctorAppointment() {
     setDate('');
     setTime('');
     setEndTime('');
+    setScheduleStatus('available');
     setNotes('');
   };
 
@@ -663,10 +765,14 @@ export default function DoctorAppointment() {
               return true;
             })
             .filter((a: any) => {
-              const d = String(a?.date || '').trim();
-              const t = String(a?.time || '').trim();
-              // Hide past date/time appointments
-              return validateFutureDateTime(d, t) == null;
+              try {
+                const d = String(a?.date || '').trim();
+                const t = String(a?.time || '').trim();
+                // Hide past date/time appointments
+                return validateFutureDateTime(d, t) == null;
+              } catch {
+                return true;
+              }
             })
             .map((a: any) => ({
               id: a.id,
@@ -680,6 +786,34 @@ export default function DoctorAppointment() {
       }
     } catch {}
   }, [getAuthHeaders, validateFutureDateTime]);
+
+  const loadScheduleSlots = React.useCallback(async () => {
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`${API_BASE}/api/schedule-slots`, { headers });
+      if (!res.ok) return;
+      const arr = await res.json();
+      if (!Array.isArray(arr)) return;
+      setScheduleSlots(
+        arr.map((s: any) => ({
+          id: s?.id,
+          date: String(s?.date || '').trim(),
+          time: String(s?.time || '').trim() || undefined,
+          start_time:
+            String(s?.start_time || s?.startTime || '').trim() || undefined,
+          end_time: String(s?.end_time || s?.endTime || '').trim() || undefined,
+          notes: String(s?.notes || '').trim() || undefined,
+          status: String(s?.status || '').trim() || undefined,
+          is_booked:
+            s?.is_booked != null
+              ? Boolean(s?.is_booked)
+              : s?.isBooked != null
+              ? Boolean(s?.isBooked)
+              : undefined,
+        })),
+      );
+    } catch {}
+  }, [getAuthHeaders]);
 
   const visibleAppointments = React.useMemo(() => {
     const parseDt = (ymd: string, tm: string): Date | null => {
@@ -721,6 +855,61 @@ export default function DoctorAppointment() {
     const sliced = showAllList ? withIdx : withIdx.slice(0, 10);
     return { list: sliced, total };
   }, [appointments, showAllList]);
+
+  const visibleSchedules = React.useMemo(() => {
+    const parseDt = (ymd: string, tm: string): Date | null => {
+      try {
+        const [y, m, d] = String(ymd || '')
+          .split('-')
+          .map(Number);
+        if (!y || !m || !d) return null;
+        const mins = time12ToMinutes(String(tm || '').trim());
+        if (mins == null) return null;
+        return new Date(y, m - 1, d, Math.floor(mins / 60), mins % 60);
+      } catch {
+        return null;
+      }
+    };
+
+    const byDate: Record<string, Array<(typeof scheduleSlots)[number]>> = {};
+    for (const s of scheduleSlots || []) {
+      const ymd = String((s as any)?.date || '').trim();
+      const tm = String(
+        (s as any)?.start_time || (s as any)?.time || '',
+      ).trim();
+      const dt = parseDt(ymd, tm);
+      if (!ymd || !dt) continue;
+      if (!byDate[ymd]) byDate[ymd] = [];
+      byDate[ymd].push(s);
+    }
+
+    const groups = Object.keys(byDate)
+      .map(ymd => {
+        const slots = (byDate[ymd] || []).slice();
+        slots.sort((a: any, b: any) => {
+          const am = time12ToMinutes(String(a?.start_time || a?.time || ''));
+          const bm = time12ToMinutes(String(b?.start_time || b?.time || ''));
+          if (am == null && bm == null) return 0;
+          if (am == null) return 1;
+          if (bm == null) return -1;
+          return am - bm;
+        });
+
+        const first = slots[0];
+        const tm = String(first?.start_time || first?.time || '').trim();
+        const dt = parseDt(ymd, tm);
+        return { ymd, slots, dt };
+      })
+      .filter(g => g.dt != null);
+
+    groups.sort((a, b) => (a.dt!.getTime() || 0) - (b.dt!.getTime() || 0));
+    const total = groups.length;
+    const sliced = showAllList ? groups : groups.slice(0, 10);
+    return { list: sliced, total };
+  }, [scheduleSlots, showAllList, time12ToMinutes]);
+
+  const activeVisibleList =
+    activeList === 'appointments' ? visibleAppointments : visibleSchedules;
 
   const bookedDateSet = React.useMemo(() => {
     const s = new Set<string>();
@@ -987,6 +1176,7 @@ export default function DoctorAppointment() {
               startTime: t,
               end_time: String(endTime || '').trim(),
               endTime: String(endTime || '').trim(),
+              status: scheduleStatus,
               specialty,
               notes,
               doctorName: createdByName,
@@ -1033,7 +1223,8 @@ export default function DoctorAppointment() {
         ]);
       } else {
         try {
-          await loadAppointments();
+          if (isSchedule) await loadScheduleSlots();
+          else await loadAppointments();
         } catch {}
       }
       setShowNew(false);
@@ -1070,9 +1261,10 @@ export default function DoctorAppointment() {
     (async () => {
       try {
         await loadAppointments();
+        await loadScheduleSlots();
       } catch {}
     })();
-  }, [loadAppointments]);
+  }, [loadAppointments, loadScheduleSlots]);
 
   // Also check reminders whenever this screen regains focus
   useFocusEffect(
@@ -1101,6 +1293,7 @@ export default function DoctorAppointment() {
     setRefreshing(true);
     try {
       await loadAppointments();
+      await loadScheduleSlots();
       try {
         const raw = await AsyncStorage.getItem('doctor_notifications');
         const arr = raw ? JSON.parse(raw) : [];
@@ -1114,7 +1307,7 @@ export default function DoctorAppointment() {
     } finally {
       setRefreshing(false);
     }
-  }, [loadAppointments]);
+  }, [loadAppointments, loadScheduleSlots]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -1238,8 +1431,56 @@ export default function DoctorAppointment() {
                 },
               ]}
             >
-              <Text style={styles.listTitle}>Appointment List</Text>
-              {visibleAppointments.total > 10 && (
+              <View
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
+              >
+                <TouchableOpacity
+                  style={[
+                    styles.entryTypeBtn,
+                    activeList === 'appointments' && styles.entryTypeBtnActive,
+                  ]}
+                  activeOpacity={0.85}
+                  onPress={() => {
+                    setActiveList('appointments');
+                    setShowAllList(false);
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.entryTypeText,
+                      activeList === 'appointments' &&
+                        styles.entryTypeTextActive,
+                    ]}
+                  >
+                    Appointment List
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.entryTypeBtn,
+                    activeList === 'schedules' && styles.entryTypeBtnActive,
+                  ]}
+                  activeOpacity={0.85}
+                  onPress={async () => {
+                    setActiveList('schedules');
+                    setShowAllList(false);
+                    setExpandedScheduleDays({});
+                    try {
+                      await loadScheduleSlots();
+                    } catch {}
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.entryTypeText,
+                      activeList === 'schedules' && styles.entryTypeTextActive,
+                    ]}
+                  >
+                    Schedule List
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              {activeVisibleList.total > 10 && (
                 <TouchableOpacity
                   onPress={() => setShowAllList(v => !v)}
                   activeOpacity={0.85}
@@ -1251,16 +1492,18 @@ export default function DoctorAppointment() {
               )}
             </View>
 
-            {visibleAppointments.total === 0 ? (
+            {activeVisibleList.total === 0 ? (
               <Text
                 style={[
                   styles.itemDesc,
                   { textAlign: 'center', paddingVertical: 12 },
                 ]}
               >
-                No appointments yet.
+                {activeList === 'appointments'
+                  ? 'No appointments yet.'
+                  : 'No schedules yet.'}
               </Text>
-            ) : (
+            ) : activeList === 'appointments' ? (
               visibleAppointments.list.map(({ a, idx }) => {
                 const parsed = parseYmd(a.date);
                 const mon = parsed ? monthAbbr(parsed.getMonth()) : '';
@@ -1323,9 +1566,298 @@ export default function DoctorAppointment() {
                   </TouchableOpacity>
                 );
               })
+            ) : (
+              visibleSchedules.list.map(g => {
+                const parsed = parseYmd(String(g?.ymd || ''));
+                const mon = parsed ? monthAbbr(parsed.getMonth()) : '';
+                const day = parsed ? String(parsed.getDate()) : '';
+                const yr = parsed ? String(parsed.getFullYear()) : '';
+                const expanded = Boolean(expandedScheduleDays[g.ymd]);
+                const slots = Array.isArray(g?.slots) ? g.slots : [];
+                const bookedCount = slots.filter((s: any) =>
+                  Boolean(s?.is_booked),
+                ).length;
+
+                return (
+                  <View key={`group-${g.ymd}`}>
+                    <TouchableOpacity
+                      style={styles.listItem}
+                      activeOpacity={0.85}
+                      onPress={() => {
+                        setExpandedScheduleDays(prev => ({
+                          ...prev,
+                          [g.ymd]: !prev[g.ymd],
+                        }));
+                      }}
+                    >
+                      <View style={styles.dateCol}>
+                        <Text style={styles.dateMon}>{mon}</Text>
+                        <Text style={styles.dateDay}>{day}</Text>
+                        <Text style={styles.dateYear}>{yr}</Text>
+                      </View>
+                      <View style={styles.itemDescWrap}>
+                        <Text style={styles.itemPatient} numberOfLines={1}>
+                          {`Schedule • ${slots.length} slot${
+                            slots.length === 1 ? '' : 's'
+                          }`}
+                        </Text>
+                        <Text style={styles.itemDesc} numberOfLines={2}>
+                          {bookedCount > 0
+                            ? `${bookedCount} booked`
+                            : 'Tap to view times'}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+
+                    {expanded &&
+                      slots.map((s: any, idx: number) => {
+                        const st = String(
+                          s?.start_time || s?.time || '',
+                        ).trim();
+                        const et = String(s?.end_time || '').trim();
+                        const tmLabel = st && et ? `${st} - ${et}` : st;
+                        const booked = Boolean(s?.is_booked);
+                        const status = String(s?.status || '').trim();
+                        const statusPretty = status
+                          ? `${status.charAt(0).toUpperCase()}${status.slice(
+                              1,
+                            )}`
+                          : '';
+                        const statusLabel = booked
+                          ? 'Booked'
+                          : statusPretty
+                          ? statusPretty
+                          : 'Available';
+                        const noteLabel = String(s?.notes || '').trim();
+
+                        return (
+                          <View
+                            key={`${g.ymd}-${s?.id ?? idx}`}
+                            style={{
+                              paddingLeft: 74,
+                              paddingBottom: 8,
+                            }}
+                          >
+                            <View
+                              style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: 12,
+                              }}
+                            >
+                              <View style={{ flex: 1 }}>
+                                <Text
+                                  style={styles.itemPatient}
+                                  numberOfLines={1}
+                                >
+                                  {tmLabel}
+                                </Text>
+                                <Text style={styles.itemDesc} numberOfLines={2}>
+                                  {statusLabel}
+                                  {noteLabel ? ` • ${noteLabel}` : ''}
+                                </Text>
+                              </View>
+                              <TouchableOpacity
+                                style={[
+                                  styles.viewBtn,
+                                  { paddingHorizontal: 12 },
+                                ]}
+                                activeOpacity={0.85}
+                                onPress={() => openScheduleEdit(s)}
+                              >
+                                <Text style={styles.viewBtnText}>Edit</Text>
+                              </TouchableOpacity>
+                            </View>
+                          </View>
+                        );
+                      })}
+                  </View>
+                );
+              })
             )}
           </View>
         </ScrollView>
+
+        {/* Schedule Edit Modal */}
+        <Modal
+          visible={showScheduleEdit}
+          animationType="fade"
+          transparent
+          onRequestClose={() => setShowScheduleEdit(false)}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Edit Schedule Slot</Text>
+                <TouchableOpacity
+                  style={styles.closeBtn}
+                  onPress={() => setShowScheduleEdit(false)}
+                >
+                  <Text style={styles.closeText}>×</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.formGroup}>
+                <Text style={styles.inputLabel}>Date</Text>
+                <View style={styles.inputWithIcon}>
+                  <TextInput
+                    placeholder="Date"
+                    placeholderTextColor="#9CA3AF"
+                    value={seDate}
+                    onChangeText={setSeDate}
+                    editable={false}
+                    style={[styles.input, { paddingRight: 40 }]}
+                  />
+                  <TouchableOpacity
+                    style={styles.iconOverlay}
+                    onPress={() => {
+                      setPickerTarget('scheduleEdit');
+                      setShowDatePicker(true);
+                    }}
+                  >
+                    <Image
+                      source={require('../../assets/appointment_icon.png')}
+                      style={styles.inlineIcon}
+                      resizeMode="contain"
+                    />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <View style={styles.row2}>
+                <View style={{ flex: 1, marginRight: 8 }}>
+                  <Text style={styles.inputLabel}>Start Time</Text>
+                  <View style={styles.inputWithIcon}>
+                    <TextInput
+                      placeholder="Start Time"
+                      placeholderTextColor="#9CA3AF"
+                      value={seStartTime}
+                      onChangeText={setSeStartTime}
+                      editable={false}
+                      style={[styles.input, { paddingRight: 40 }]}
+                    />
+                    <TouchableOpacity
+                      style={styles.iconOverlay}
+                      onPress={() => {
+                        setPickerTarget('scheduleEdit');
+                        setTimePickerField('start');
+                        setShowTimePicker(true);
+                      }}
+                    >
+                      <Image
+                        source={require('../../assets/time_icon.png')}
+                        style={styles.inlineIcon}
+                        resizeMode="contain"
+                      />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                <View style={{ flex: 1, marginLeft: 8 }}>
+                  <Text style={styles.inputLabel}>End Time</Text>
+                  <View style={styles.inputWithIcon}>
+                    <TextInput
+                      placeholder="End Time"
+                      placeholderTextColor="#9CA3AF"
+                      value={seEndTime}
+                      onChangeText={setSeEndTime}
+                      editable={false}
+                      style={[styles.input, { paddingRight: 40 }]}
+                    />
+                    <TouchableOpacity
+                      style={styles.iconOverlay}
+                      onPress={() => {
+                        setPickerTarget('scheduleEdit');
+                        setTimePickerField('end');
+                        setShowTimePicker(true);
+                      }}
+                    >
+                      <Image
+                        source={require('../../assets/time_icon.png')}
+                        style={styles.inlineIcon}
+                        resizeMode="contain"
+                      />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.formGroup}>
+                <Text style={styles.inputLabel}>Status</Text>
+                <View style={styles.scheduleStatusRow}>
+                  <TouchableOpacity
+                    style={[
+                      styles.scheduleStatusOption,
+                      seStatus === 'available' &&
+                        styles.scheduleStatusOptionActive,
+                    ]}
+                    activeOpacity={0.85}
+                    onPress={() => setSeStatus('available')}
+                  >
+                    <Text
+                      style={[
+                        styles.scheduleStatusText,
+                        seStatus === 'available' &&
+                          styles.scheduleStatusTextActive,
+                      ]}
+                    >
+                      Available
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.scheduleStatusOption,
+                      seStatus === 'not available' &&
+                        styles.scheduleStatusOptionActive,
+                    ]}
+                    activeOpacity={0.85}
+                    onPress={() => setSeStatus('not available')}
+                  >
+                    <Text
+                      style={[
+                        styles.scheduleStatusText,
+                        seStatus === 'not available' &&
+                          styles.scheduleStatusTextActive,
+                      ]}
+                    >
+                      Not Available
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <View style={styles.formGroup}>
+                <Text style={styles.inputLabel}>Notes</Text>
+                <TextInput
+                  placeholder="Optional notes"
+                  placeholderTextColor="#9CA3AF"
+                  value={seNotes}
+                  onChangeText={setSeNotes}
+                  style={[
+                    styles.input,
+                    { height: 90, textAlignVertical: 'top' },
+                  ]}
+                  multiline
+                />
+              </View>
+
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={[styles.actionBtn, styles.cancelBtn]}
+                  onPress={() => setShowScheduleEdit(false)}
+                >
+                  <Text style={styles.cancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.actionBtn, styles.saveBtn]}
+                  onPress={onSaveScheduleEdit}
+                >
+                  <Text style={styles.saveText}>Save</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
 
         {/* Bottom Bar */}
         <View style={styles.bottomBar}>
@@ -1510,7 +2042,10 @@ export default function DoctorAppointment() {
                   newEntryType === 'schedule' && styles.entryTypeBtnActive,
                 ]}
                 activeOpacity={0.85}
-                onPress={() => setNewEntryType('schedule')}
+                onPress={() => {
+                  setNewEntryType('schedule');
+                  setScheduleStatus('available');
+                }}
               >
                 <Text
                   style={[
@@ -1618,6 +2153,51 @@ export default function DoctorAppointment() {
                         />
                       </TouchableOpacity>
                     </View>
+                  </View>
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Status</Text>
+                  <View style={styles.scheduleStatusRow}>
+                    <TouchableOpacity
+                      style={[
+                        styles.scheduleStatusOption,
+                        scheduleStatus === 'available' &&
+                          styles.scheduleStatusOptionActive,
+                      ]}
+                      activeOpacity={0.85}
+                      onPress={() => setScheduleStatus('available')}
+                    >
+                      <Text
+                        style={[
+                          styles.scheduleStatusText,
+                          scheduleStatus === 'available' &&
+                            styles.scheduleStatusTextActive,
+                        ]}
+                      >
+                        Available
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.scheduleStatusOption,
+                        scheduleStatus === 'not available' &&
+                          styles.scheduleStatusOptionActive,
+                      ]}
+                      activeOpacity={0.85}
+                      onPress={() => setScheduleStatus('not available')}
+                    >
+                      <Text
+                        style={[
+                          styles.scheduleStatusText,
+                          scheduleStatus === 'not available' &&
+                            styles.scheduleStatusTextActive,
+                        ]}
+                      >
+                        Not Available
+                      </Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
               </>
@@ -1776,8 +2356,10 @@ export default function DoctorAppointment() {
                           const dd = String(d).padStart(2, '0');
                           if (pickerTarget === 'new') {
                             setDate(`${year}-${mm}-${dd}`);
-                          } else {
+                          } else if (pickerTarget === 'detail') {
                             setDDate(`${year}-${mm}-${dd}`);
+                          } else {
+                            setSeDate(`${year}-${mm}-${dd}`);
                           }
                           setShowDatePicker(false);
                         }
@@ -1914,7 +2496,12 @@ export default function DoctorAppointment() {
                   const mm = String(tpMinute).padStart(2, '0');
                   // If selected date is today, block past times
                   const selIsToday = (() => {
-                    const targetDate = pickerTarget === 'new' ? date : dDate;
+                    const targetDate =
+                      pickerTarget === 'new'
+                        ? date
+                        : pickerTarget === 'detail'
+                        ? dDate
+                        : seDate;
                     if (!targetDate) return false;
                     const [y, m, d] = targetDate.split('-').map(Number);
                     const dt = new Date(y, (m || 1) - 1, d || 1);
@@ -1944,8 +2531,12 @@ export default function DoctorAppointment() {
                     )
                       setEndTime(`${hh}:${mm} ${tpPeriod}`);
                     else setTime(`${hh}:${mm} ${tpPeriod}`);
-                  } else {
+                  } else if (pickerTarget === 'detail') {
                     setDTime(`${hh}:${mm} ${tpPeriod}`);
+                  } else {
+                    if (timePickerField === 'end')
+                      setSeEndTime(`${hh}:${mm} ${tpPeriod}`);
+                    else setSeStartTime(`${hh}:${mm} ${tpPeriod}`);
                   }
                   setShowTimePicker(false);
                 }}
@@ -2249,6 +2840,28 @@ const styles = StyleSheet.create({
   itemDescWrap: { flex: 1, paddingHorizontal: 12 },
   itemPatient: { color: '#111827', fontWeight: '800', marginBottom: 2 },
   itemDesc: { color: MUTED, fontSize: 12 },
+  scheduleStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  scheduleStatusOption: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: BORDER,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scheduleStatusOptionActive: {
+    borderColor: GREEN,
+    backgroundColor: '#E5F7F0',
+  },
+  scheduleStatusText: { color: MUTED, fontWeight: '800' },
+  scheduleStatusTextActive: { color: GREEN },
   viewBtn: {
     paddingHorizontal: 10,
     paddingVertical: 6,

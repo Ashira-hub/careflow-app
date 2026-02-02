@@ -774,15 +774,18 @@ const PatientPrescription = () => {
           await RNPrint.print({ filePath });
           return true;
         }
-        if (filePath) {
-          const shareOptions =
-            Platform.OS === 'ios'
-              ? { url: `file://${filePath}`, message: 'Careflow Print Preview' }
-              : { url: filePath, message: 'Careflow Print Preview' };
-          await Share.share(shareOptions as any);
-          return true;
-        }
+        if (filePath) return false;
       }
+
+      if (RNPrint?.print) {
+        await RNPrint.print({ html });
+        return true;
+      }
+
+      Alert.alert(
+        'Print',
+        'Printing is unavailable in this build. Please rebuild the app so the native print/PDF modules can be loaded.',
+      );
 
       return false;
     } catch {
@@ -1095,27 +1098,31 @@ const PatientPrescription = () => {
         } catch {}
 
         if (RNHTMLtoPDF?.convert) {
-          const fileName = `careflow_${Date.now()}`;
-          const pdf = await RNHTMLtoPDF.convert({
-            html,
-            fileName,
-            base64: false,
-          });
-          const filePath = pdf?.filePath;
-          if (!filePath) {
-            Alert.alert('Print', 'Failed to generate PDF.');
-            return;
-          }
-          if (RNPrint?.print) {
-            await RNPrint.print({ filePath });
-            return;
-          }
+          try {
+            const fileName = `careflow_${Date.now()}`;
+            const pdf = await RNHTMLtoPDF.convert({
+              html,
+              fileName,
+              base64: false,
+            });
+            const filePath = pdf?.filePath;
+            if (filePath) {
+              if (RNPrint?.print) {
+                await RNPrint.print({ filePath });
+                return;
+              }
 
-          const shareOptions =
-            Platform.OS === 'ios'
-              ? { url: `file://${filePath}` }
-              : { url: filePath };
-          await Share.share(shareOptions);
+              Alert.alert(
+                'Print',
+                'Printing is unavailable in this build. Please rebuild the app so the native print/PDF modules can be loaded.',
+              );
+              return;
+            }
+          } catch {}
+        }
+
+        if (RNPrint?.print) {
+          await RNPrint.print({ html });
           return;
         }
 
@@ -1132,7 +1139,10 @@ const PatientPrescription = () => {
             return;
           }
           if (uri) {
-            await Share.share({ url: uri });
+            Alert.alert(
+              'Print',
+              'Printing is unavailable in this build. Please rebuild the app so the native print/PDF modules can be loaded.',
+            );
             return;
           }
         }
@@ -1142,12 +1152,10 @@ const PatientPrescription = () => {
           return;
         }
 
-        if (fallbackMessage) await Share.share({ message: fallbackMessage });
-        else
-          Alert.alert(
-            'Print',
-            'Printing is unavailable in this build. Rebuild the app so native print/PDF modules can be loaded.',
-          );
+        Alert.alert(
+          'Print',
+          'Printing is unavailable in this build. Please rebuild the app so the native print/PDF modules can be loaded.',
+        );
       } catch {
         Alert.alert('Print', 'Failed to print.');
       }

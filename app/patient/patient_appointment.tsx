@@ -113,7 +113,7 @@ const PatientAppointment = () => {
   const [specialization, setSpecialization] = useState('');
   const [showSpecializationPicker, setShowSpecializationPicker] =
     useState(false);
-  const [scheduleDay, setScheduleDay] = useState('Monday');
+  const [scheduleDay, setScheduleDay] = useState('');
   const [showScheduleDayPicker, setShowScheduleDayPicker] = useState(false);
   const [scheduleTime, setScheduleTime] = useState('');
   const [showScheduleTimePicker, setShowScheduleTimePicker] = useState(false);
@@ -331,18 +331,96 @@ const PatientAppointment = () => {
     [],
   );
 
-  const scheduleDayOptions = useMemo(
+  const scheduleDayOptions = useMemo(() => {
+    const uniq = new Set<string>();
+    for (const s of scheduleSlots || []) {
+      const d = String((s as any)?.date || '').trim();
+      if (d) uniq.add(d);
+    }
+    return Array.from(uniq).sort((a, b) => String(a).localeCompare(String(b)));
+  }, [scheduleSlots]);
+
+  const [scheduleCalendarCurrent, setScheduleCalendarCurrent] = useState<Date>(
+    new Date(),
+  );
+
+  const scheduleAvailableDateSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const d of scheduleDayOptions || []) {
+      const key = String(d || '').trim();
+      if (key) s.add(key);
+    }
+    return s;
+  }, [scheduleDayOptions]);
+
+  const scheduleCalYear = scheduleCalendarCurrent.getFullYear();
+  const scheduleCalMonth = scheduleCalendarCurrent.getMonth();
+
+  const scheduleCalMonthNames = useMemo(
     () => [
-      'Sunday',
-      'Monday',
-      'Tuesday',
-      'Wednesday',
-      'Thursday',
-      'Friday',
-      'Saturday',
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
     ],
     [],
   );
+
+  const scheduleCalMonthMatrix = useMemo(() => {
+    const first = new Date(scheduleCalYear, scheduleCalMonth, 1);
+    const startDow = first.getDay();
+    const daysInMonth = new Date(
+      scheduleCalYear,
+      scheduleCalMonth + 1,
+      0,
+    ).getDate();
+    const weeks: Array<Array<number | null>> = [];
+    let cur = 1;
+    for (let r = 0; r < 6; r++) {
+      const row: Array<number | null> = [];
+      for (let c = 0; c < 7; c++) {
+        if (r === 0 && c < startDow) {
+          row.push(null);
+        } else if (cur > daysInMonth) {
+          row.push(null);
+        } else {
+          row.push(cur);
+          cur++;
+        }
+      }
+      weeks.push(row);
+      if (cur > daysInMonth) break;
+    }
+    return weeks;
+  }, [scheduleCalMonth, scheduleCalYear]);
+
+  const scheduleCalIsPastYmd = React.useCallback((ymd: string) => {
+    try {
+      const [y, m, d] = String(ymd || '')
+        .split('-')
+        .map(Number);
+      if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d))
+        return false;
+      const dt = new Date(y, (m || 1) - 1, d || 1);
+      const now = new Date();
+      const startToday = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate(),
+      );
+      return dt < startToday;
+    } catch {
+      return false;
+    }
+  }, []);
 
   const minutesToTime12 = React.useCallback((mins: number) => {
     const h24 = Math.floor(mins / 60);
@@ -390,18 +468,41 @@ const PatientAppointment = () => {
     [minutesToTimeCompact, time12ToMinutes],
   );
 
-  const scheduleTimeOptions = useMemo(() => {
-    const day = String(scheduleDay || 'Monday');
-    const isSat = day.toLowerCase() === 'saturday';
-    const start = 8 * 60;
-    const end = isSat ? 12 * 60 : 17 * 60;
-    const out: string[] = [];
-    for (let t = start; t + 30 <= end; t += 30) {
-      if (!isSat && t >= 12 * 60 && t < 13 * 60) continue;
-      out.push(minutesToTime12(t));
+  const availableScheduleTimeOptions = useMemo(() => {
+    const date = String(scheduleDay || '').trim();
+    if (!date) return [];
+
+    const uniq = new Set<string>();
+    for (const s of scheduleSlots || []) {
+      if (String((s as any)?.date || '').trim() !== date) continue;
+      const t = String((s as any)?.start_time || (s as any)?.time || '').trim();
+      if (t) uniq.add(t);
     }
+    const out = Array.from(uniq);
+    out.sort((a, b) => {
+      const am = time12ToMinutes(String(a || '').trim());
+      const bm = time12ToMinutes(String(b || '').trim());
+      if (am == null && bm == null) return 0;
+      if (am == null) return 1;
+      if (bm == null) return -1;
+      return am - bm;
+    });
     return out;
-  }, [minutesToTime12, scheduleDay]);
+  }, [scheduleDay, scheduleSlots, time12ToMinutes]);
+
+  const filteredDoctors = useMemo(() => {
+    const spec = String(specialization || '')
+      .trim()
+      .toLowerCase();
+    const list = Array.isArray(doctors) ? doctors : [];
+    if (!spec) return list;
+    return list.filter(
+      d =>
+        String(d?.specialty || '')
+          .trim()
+          .toLowerCase() === spec,
+    );
+  }, [doctors, specialization]);
 
   const bookedSlotSet = useMemo(() => {
     const s = new Set<string>();
@@ -411,137 +512,6 @@ const PatientAppointment = () => {
     }
     return s;
   }, [bookedSlotKeys]);
-
-  const availableScheduleTimeOptions = useMemo(() => {
-    const nextDateFor = (weekday: string, timeStr: string) => {
-      const map: Record<string, number> = {
-        sunday: 0,
-        monday: 1,
-        tuesday: 2,
-        wednesday: 3,
-        thursday: 4,
-        friday: 5,
-        saturday: 6,
-      };
-      const target = map[String(weekday || '').toLowerCase()] ?? 1;
-      const now = new Date();
-      const base = new Date(
-        now.getFullYear(),
-        now.getMonth(),
-        now.getDate(),
-        0,
-        0,
-        0,
-        0,
-      );
-      const cur = base.getDay();
-      let delta = (target - cur + 7) % 7;
-      let d = new Date(base);
-      d.setDate(base.getDate() + delta);
-
-      // If booking for today, ensure selected time is still in the future; otherwise push to next week
-      try {
-        const [hhmm, ap] = String(timeStr || '').split(' ');
-        const [hhStr, mmStr] = String(hhmm || '').split(':');
-        const hh = Number(hhStr);
-        const mm = Number(mmStr);
-        if (Number.isFinite(hh) && Number.isFinite(mm)) {
-          const h24 = (hh % 12) + (String(ap).toUpperCase() === 'PM' ? 12 : 0);
-          const dt = new Date(
-            d.getFullYear(),
-            d.getMonth(),
-            d.getDate(),
-            h24,
-            mm,
-            0,
-            0,
-          );
-          if (delta === 0 && dt.getTime() <= now.getTime()) {
-            d = new Date(base);
-            d.setDate(base.getDate() + 7);
-          }
-        }
-      } catch {}
-      return d;
-    };
-
-    const day = String(scheduleDay || '').trim();
-    if (!day) return [];
-    return (scheduleTimeOptions || []).filter(t => {
-      const date = formatYmd(nextDateFor(day, String(t || '')));
-      const key = `${date}|${String(t || '')}`;
-      return !bookedSlotSet.has(key);
-    });
-  }, [bookedSlotSet, formatYmd, scheduleDay, scheduleTimeOptions]);
-
-  const filteredDoctors = useMemo(() => {
-    const spec = String(specialization || '')
-      .trim()
-      .toLowerCase();
-    if (!spec) return [];
-    return (doctors || []).filter(d => {
-      const docSpec = String(d?.specialty || '')
-        .trim()
-        .toLowerCase();
-      if (!docSpec) return false;
-      return docSpec === spec;
-    });
-  }, [doctors, specialization]);
-
-  const getNextDateForWeekday = React.useCallback(
-    (weekday: string, timeStr: string) => {
-      const map: Record<string, number> = {
-        sunday: 0,
-        monday: 1,
-        tuesday: 2,
-        wednesday: 3,
-        thursday: 4,
-        friday: 5,
-        saturday: 6,
-      };
-      const target = map[String(weekday || '').toLowerCase()] ?? 1;
-      const now = new Date();
-      const base = new Date(
-        now.getFullYear(),
-        now.getMonth(),
-        now.getDate(),
-        0,
-        0,
-        0,
-        0,
-      );
-      const cur = base.getDay();
-      let delta = (target - cur + 7) % 7;
-      let d = new Date(base);
-      d.setDate(base.getDate() + delta);
-
-      // If booking for today, ensure selected time is still in the future; otherwise push to next week
-      try {
-        const [hhmm, ap] = String(timeStr || '').split(' ');
-        const [hhStr, mmStr] = String(hhmm || '').split(':');
-        const hh = Number(hhStr);
-        const mm = Number(mmStr);
-        if (Number.isFinite(hh) && Number.isFinite(mm)) {
-          const h24 = (hh % 12) + (String(ap).toUpperCase() === 'PM' ? 12 : 0);
-          const dt = new Date(
-            d.getFullYear(),
-            d.getMonth(),
-            d.getDate(),
-            h24,
-            mm,
-            0,
-            0,
-          );
-          if (delta === 0 && dt.getTime() <= now.getTime()) {
-            d = new Date(base);
-            d.setDate(base.getDate() + 7);
-          }
-        }
-      } catch {}
-      return d;
-    },
-    [],
-  );
 
   const loadAppointments = React.useCallback(
     async (opts?: { silent?: boolean }) => {
@@ -897,6 +867,111 @@ const PatientAppointment = () => {
   }, [doctor, doctorUserId, getAuthHeaders, isModalVisible, nameMatches]);
 
   React.useEffect(() => {
+    if (!isModalVisible) return;
+    const docName = String(doctor || '').trim();
+    const docId = doctorUserId;
+    if (!docName && docId == null) {
+      setScheduleDay('');
+      setScheduleTime('');
+      setSelectedSchedule(null);
+      return;
+    }
+
+    (async () => {
+      try {
+        const headers = await getAuthHeaders();
+        const qs =
+          docId != null && String(docId).trim().length > 0
+            ? `doctor_user_id=${encodeURIComponent(String(docId))}`
+            : `doctor_name=${encodeURIComponent(String(docName))}`;
+        const res = await fetch(
+          `${API_BASE}/api/schedule-slots?${qs}&available=1`,
+          { headers },
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const arr = await res.json();
+        const list = Array.isArray(arr) ? arr : [];
+
+        const now = new Date();
+        const startToday = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate(),
+        );
+
+        const slots: ScheduleSlot[] = list
+          .filter((a: any) => {
+            const booked = Boolean(a?.is_booked);
+            const status = String(a?.status || '')
+              .toLowerCase()
+              .trim();
+            if (booked) return false;
+            if (status && status !== 'available' && status !== 'schedule')
+              return false;
+            return true;
+          })
+          .map((a: any) => {
+            const id = String(a?.id ?? `${a?.date || ''}-${a?.time || ''}`);
+            const date = String(a?.date || '');
+            const start_time = String(
+              a?.start_time || a?.startTime || '',
+            ).trim();
+            const end_time = String(a?.end_time || a?.endTime || '').trim();
+            const time =
+              start_time ||
+              String(a?.time || '').trim() ||
+              String(a?.time || '');
+            const doctorName = String(
+              a?.doctor_name || a?.doctorName || docName,
+            );
+            const aDocId = a?.doctor_user_id ?? a?.doctorUserId;
+            return {
+              id,
+              doctorName: doctorName || docName,
+              doctorUserId: aDocId ?? docId,
+              date,
+              time,
+              start_time: start_time || undefined,
+              end_time: end_time || undefined,
+              notes: String(a?.notes || '').trim() || undefined,
+            } as ScheduleSlot;
+          })
+          .filter((s: ScheduleSlot) => {
+            try {
+              const [y, m, d] = String(s.date || '')
+                .split('-')
+                .map(Number);
+              if (
+                !Number.isFinite(y) ||
+                !Number.isFinite(m) ||
+                !Number.isFinite(d)
+              )
+                return true;
+              const dt = new Date(y, (m || 1) - 1, d || 1);
+              return dt >= startToday;
+            } catch {
+              return true;
+            }
+          })
+          .sort((a: ScheduleSlot, b: ScheduleSlot) =>
+            `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`),
+          );
+
+        setScheduleSlots(slots);
+
+        setSelectedSchedule(prev => {
+          if (!prev) return null;
+          const keep = slots.find(s => String(s.id) === String(prev.id));
+          return keep || null;
+        });
+      } catch {
+        setScheduleSlots([]);
+        setSelectedSchedule(null);
+      }
+    })();
+  }, [doctor, doctorUserId, getAuthHeaders, isModalVisible]);
+
+  React.useEffect(() => {
     if (selectedSchedule) return;
     const cur = String(scheduleTime || '').trim();
     if (!cur) return;
@@ -904,6 +979,19 @@ const PatientAppointment = () => {
       setScheduleTime('');
     }
   }, [availableScheduleTimeOptions, scheduleTime, selectedSchedule]);
+
+  React.useEffect(() => {
+    if (selectedSchedule) return;
+    const date = String(scheduleDay || '').trim();
+    const time = String(scheduleTime || '').trim();
+    if (!date || !time) return;
+    const slot = (scheduleSlots || []).find(s => {
+      const d = String((s as any)?.date || '').trim();
+      const t = String((s as any)?.start_time || (s as any)?.time || '').trim();
+      return d === date && t === time;
+    });
+    if (slot) setSelectedSchedule(slot);
+  }, [scheduleDay, scheduleSlots, scheduleTime, selectedSchedule]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -951,7 +1039,7 @@ const PatientAppointment = () => {
     setSelectedSchedule(null);
     setScheduleSlots([]);
     setSpecialization('');
-    setScheduleDay('Monday');
+    setScheduleDay('');
     setScheduleTime('');
     setDoctor('');
     setDoctorUserId(undefined);
@@ -1082,7 +1170,7 @@ const PatientAppointment = () => {
       setSelectedSchedule(null);
       setReason('');
       setSpecialization('');
-      setScheduleDay('Monday');
+      setScheduleDay('');
       setScheduleTime('');
       setIsModalVisible(false);
       loadAppointments();
@@ -1696,17 +1784,17 @@ const PatientAppointment = () => {
                     Alert.alert('Validation', 'Please select a doctor first.');
                     return;
                   }
-                  setShowSchedulePicker(true);
+                  setShowScheduleDayPicker(true);
                 }}
               >
                 <View style={styles.doctorSelectRow}>
                   <Text style={styles.doctorSelectText}>
-                    {selectedSchedule
-                      ? `${selectedSchedule.date} • ${selectedSchedule.time}`
-                      : 'Select schedule'}
+                    {String(scheduleDay || '').trim()
+                      ? String(scheduleDay)
+                      : 'Select date'}
                   </Text>
                   <Image
-                    source={require('../../assets/dropdown.png')}
+                    source={require('../../assets/appointment_icon.png')}
                     style={styles.doctorSelectIcon}
                     resizeMode="contain"
                   />
@@ -1722,15 +1810,17 @@ const PatientAppointment = () => {
                     Alert.alert('Validation', 'Please select a doctor first.');
                     return;
                   }
-                  setShowSchedulePicker(true);
+                  if (!String(scheduleDay || '').trim()) {
+                    Alert.alert('Validation', 'Please select a date first.');
+                    return;
+                  }
+                  setShowScheduleTimePicker(true);
                 }}
               >
                 <View style={styles.doctorSelectRow}>
                   <Text style={styles.doctorSelectText}>
-                    {selectedSchedule?.time
-                      ? getTimeRangeLabel(String(selectedSchedule.time))
-                      : scheduleTime
-                      ? getTimeRangeLabel(scheduleTime)
+                    {String(scheduleTime || '').trim()
+                      ? String(scheduleTime)
                       : 'Select time'}
                   </Text>
                   <Image
@@ -1823,31 +1913,116 @@ const PatientAppointment = () => {
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, { maxHeight: '70%' }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Day</Text>
+              <Text style={styles.modalTitle}>Select Date</Text>
               <TouchableOpacity onPress={() => setShowScheduleDayPicker(false)}>
                 <Text style={styles.closeButton}>×</Text>
               </TouchableOpacity>
             </View>
             <View style={styles.modalBody}>
-              <FlatList
-                data={scheduleDayOptions}
-                keyExtractor={item => String(item)}
-                renderItem={({ item }) => (
-                  <TouchableOpacity
-                    style={styles.schedulePickerItem}
-                    activeOpacity={0.8}
-                    onPress={() => {
-                      setScheduleDay(String(item));
-                      setScheduleTime('');
-                      setShowScheduleDayPicker(false);
-                    }}
-                  >
-                    <Text style={styles.schedulePickerItemText}>
-                      {String(item)}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-              />
+              {scheduleLoading ? (
+                <Text style={styles.scheduleHint}>Loading schedules...</Text>
+              ) : (
+                <View>
+                  <View style={styles.calMonthRow}>
+                    <TouchableOpacity
+                      style={styles.calNavBtn}
+                      onPress={() =>
+                        setScheduleCalendarCurrent(
+                          new Date(scheduleCalYear, scheduleCalMonth - 1, 1),
+                        )
+                      }
+                    >
+                      <Text style={styles.calNavText}>{'<'}</Text>
+                    </TouchableOpacity>
+                    <View style={styles.calMonthTitleWrap}>
+                      <Text style={styles.calMonthText}>
+                        {scheduleCalMonthNames[scheduleCalMonth]}
+                      </Text>
+                      <Text style={styles.calYearText}>{scheduleCalYear}</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.calNavBtn}
+                      onPress={() =>
+                        setScheduleCalendarCurrent(
+                          new Date(scheduleCalYear, scheduleCalMonth + 1, 1),
+                        )
+                      }
+                    >
+                      <Text style={styles.calNavText}>{'>'}</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.calWeekHeader}>
+                    {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(
+                      w => (
+                        <Text key={w} style={styles.calWeekText}>
+                          {w}
+                        </Text>
+                      ),
+                    )}
+                  </View>
+
+                  <View style={styles.calDaysGrid}>
+                    {scheduleCalMonthMatrix.map((week, rIdx) => (
+                      <View key={rIdx} style={styles.calWeekRow}>
+                        {week.map((d, cIdx) => {
+                          const key = `${rIdx}-${cIdx}`;
+                          if (d == null) {
+                            return (
+                              <View
+                                key={key}
+                                style={[
+                                  styles.calDayCell,
+                                  styles.calDayCellEmpty,
+                                ]}
+                              />
+                            );
+                          }
+
+                          const ymd = formatYmd(
+                            new Date(scheduleCalYear, scheduleCalMonth, d),
+                          );
+                          const isPast = scheduleCalIsPastYmd(ymd);
+                          const hasSlots = scheduleAvailableDateSet.has(ymd);
+                          const isSelected =
+                            String(scheduleDay || '').trim() === ymd;
+                          const disabled = isPast;
+
+                          return (
+                            <TouchableOpacity
+                              key={key}
+                              style={[
+                                styles.calDayCell,
+                                disabled && styles.calDayCellDisabled,
+                                isSelected && styles.calDayCellSelected,
+                              ]}
+                              activeOpacity={0.8}
+                              disabled={disabled}
+                              onPress={() => {
+                                setScheduleDay(ymd);
+                                setScheduleTime('');
+                                setSelectedSchedule(null);
+                                setShowScheduleDayPicker(false);
+                              }}
+                            >
+                              <Text
+                                style={[
+                                  styles.calDayText,
+                                  disabled && styles.calDayTextDisabled,
+                                  isSelected && styles.calDayTextSelected,
+                                ]}
+                              >
+                                {String(d)}
+                              </Text>
+                              {hasSlots && <View style={styles.calDot} />}
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              )}
             </View>
           </View>
         </View>
@@ -1879,18 +2054,30 @@ const PatientAppointment = () => {
                       style={styles.schedulePickerItem}
                       activeOpacity={0.8}
                       onPress={() => {
-                        setScheduleTime(String(item));
+                        const tt = String(item);
+                        setScheduleTime(tt);
+                        try {
+                          const d = String(scheduleDay || '').trim();
+                          const slot = (scheduleSlots || []).find(s => {
+                            const sd = String((s as any)?.date || '').trim();
+                            const st = String(
+                              (s as any)?.start_time || (s as any)?.time || '',
+                            ).trim();
+                            return sd === d && st === tt;
+                          });
+                          setSelectedSchedule(slot || null);
+                        } catch {}
                         setShowScheduleTimePicker(false);
                       }}
                     >
                       <Text style={styles.schedulePickerItemText}>
-                        {getTimeRangeLabel(String(item))}
+                        {String(item)}
                       </Text>
                     </TouchableOpacity>
                   )}
                 />
               ) : (
-                <Text style={styles.scheduleHint}>No time options.</Text>
+                <Text style={styles.scheduleHint}>No schedules yet.</Text>
               )}
             </View>
           </View>
@@ -2000,10 +2187,7 @@ const PatientAppointment = () => {
 
                         try {
                           const tt = String(
-                            item?.start_time ||
-                              item?.startTime ||
-                              item?.time ||
-                              '',
+                            item?.start_time || item?.time || '',
                           ).trim();
                           if (tt) setScheduleTime(tt);
                         } catch {}
@@ -2983,6 +3167,98 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#475569',
     marginBottom: 10,
+  },
+  calMonthRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  calNavBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  calNavText: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  calMonthTitleWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  calMonthText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  calYearText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#6B7280',
+  },
+  calWeekHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  calWeekText: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#6B7280',
+  },
+  calDaysGrid: {
+    width: '100%',
+  },
+  calWeekRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  calDayCell: {
+    flex: 1,
+    aspectRatio: 1,
+    marginHorizontal: 2,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#F8FAFC',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  calDayCellEmpty: {
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+  },
+  calDayCellDisabled: {
+    opacity: 0.35,
+  },
+  calDayCellSelected: {
+    borderColor: '#10B981',
+    backgroundColor: '#ECFDF5',
+  },
+  calDayText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  calDayTextDisabled: {
+    color: '#9CA3AF',
+  },
+  calDayTextSelected: {
+    color: '#10B981',
+  },
+  calDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#10B981',
+    position: 'absolute',
+    bottom: 8,
   },
   slotWrap: {
     flexDirection: 'row',
