@@ -20,6 +20,7 @@ const BORDER = '#E5E7EB';
 const MUTED = '#6B7280';
 const CARD_BG = '#F9FAFB';
 const API_BASE = 'https://backend-careflow.vercel.app';
+const DELETED_NOTIF_IDS_KEY = 'patient_deleted_notification_ids';
 
 type NotificationItem = {
   id: string;
@@ -76,6 +77,32 @@ export default function PatientNotification() {
   const [showDetail, setShowDetail] = React.useState(false);
   const [detailItem, setDetailItem] = React.useState<NotificationItem | null>(
     null,
+  );
+
+  const getDeletedIds = React.useCallback(async (): Promise<string[]> => {
+    try {
+      const raw = await AsyncStorage.getItem(DELETED_NOTIF_IDS_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr)
+        ? arr.map((x: any) => String(x)).filter(Boolean)
+        : [];
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const addDeletedId = React.useCallback(
+    async (id: string) => {
+      try {
+        const current = await getDeletedIds();
+        const next = Array.from(new Set([String(id), ...current])).slice(
+          0,
+          1000,
+        );
+        await AsyncStorage.setItem(DELETED_NOTIF_IDS_KEY, JSON.stringify(next));
+      } catch {}
+    },
+    [getDeletedIds],
   );
 
   const getAuthHeaders = React.useCallback(async () => {
@@ -199,6 +226,11 @@ export default function PatientNotification() {
         getCurrentUserId(),
       ]);
 
+      const deletedIdsArr = await getDeletedIds();
+      const deletedSet = new Set(
+        (deletedIdsArr || []).map((x: any) => String(x)).filter(Boolean),
+      );
+
       const raw = await AsyncStorage.getItem('patient_notifications');
       const localArr: any[] = raw ? JSON.parse(raw) : [];
       const localList: NotificationItem[] = Array.isArray(localArr)
@@ -269,6 +301,7 @@ export default function PatientNotification() {
 
       const merged = Object.values(byId)
         .filter(Boolean)
+        .filter((it: any) => !deletedSet.has(String(it?.id)))
         .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
       const normalizedMerged = merged.map(it => {
@@ -314,6 +347,7 @@ export default function PatientNotification() {
     getAuthHeaders,
     getCurrentUserId,
     getCurrentUserName,
+    getDeletedIds,
     nameMatches,
     normalizeServerNotification,
   ]);
@@ -361,6 +395,7 @@ export default function PatientNotification() {
   const deleteNotification = React.useCallback(
     async (id: string) => {
       try {
+        await addDeletedId(id);
         const next = items.filter(n => n.id !== id);
         setItems(next);
         try {
@@ -382,7 +417,7 @@ export default function PatientNotification() {
         } catch {}
       } catch {}
     },
-    [getAuthHeaders, items],
+    [addDeletedId, getAuthHeaders, items],
   );
 
   const getAccent = React.useCallback((it: NotificationItem) => {
@@ -967,13 +1002,6 @@ export default function PatientNotification() {
                           <Text style={styles.detailK}>Instructions</Text>
                           <Text style={styles.detailV}>
                             {p.instructions || it.message || '-'}
-                          </Text>
-                        </View>
-
-                        <View style={styles.detailKV}>
-                          <Text style={styles.detailK}>Duration</Text>
-                          <Text style={styles.detailV}>
-                            {p.duration || '-'}
                           </Text>
                         </View>
 

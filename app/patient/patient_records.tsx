@@ -717,6 +717,12 @@ const PatientRecords = () => {
             <Text style={styles.recordDoctor}>Dr. {item.doctor}</Text>
           )}
         </View>
+
+        {item.type === 'consultation' && !!String(item.notes || '').trim() && (
+          <Text style={styles.recordDescription} numberOfLines={2}>
+            {String(item.notes)}
+          </Text>
+        )}
       </View>
     </TouchableOpacity>
   );
@@ -950,6 +956,8 @@ const PatientRecords = () => {
             <Text style={styles.detailsSectionTitle}>
               {selectedRecord?.type === 'lab_result'
                 ? 'Result / Notes'
+                : selectedRecord?.type === 'consultation'
+                ? 'Description'
                 : 'Instructions'}
             </Text>
             <View style={styles.detailsInstructionsBox}>
@@ -958,6 +966,8 @@ const PatientRecords = () => {
                   ? String(selectedRecord.notes)
                   : selectedRecord?.type === 'lab_result'
                   ? 'No result available.'
+                  : selectedRecord?.type === 'consultation'
+                  ? 'No description available.'
                   : 'No instructions available.'}
               </Text>
             </View>
@@ -1257,6 +1267,17 @@ const styles = StyleSheet.create({
   },
   recordDoctor: {
     fontSize: 14,
+    color: '#6B7280',
+  },
+  recordDescription: {
+    marginTop: 8,
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#374151',
+  },
+  recordStatus: {
+    fontSize: 12,
+    fontWeight: '500',
     color: '#6B7280',
   },
   statusBadge: {

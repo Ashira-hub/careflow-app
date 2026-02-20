@@ -668,6 +668,7 @@ export default function DoctorEditProfile() {
                   <ScrollView
                     showsVerticalScrollIndicator={false}
                     style={{ maxHeight: 420 }}
+                    contentContainerStyle={{ paddingBottom: 8 }}
                   >
                     {specialtyOptions.map(opt => (
                       <TouchableOpacity
@@ -680,6 +681,8 @@ export default function DoctorEditProfile() {
                         }}
                       >
                         <Text
+                          numberOfLines={2}
+                          ellipsizeMode="tail"
                           style={[
                             styles.specialtyOptionText,
                             specialty === opt &&
@@ -1044,6 +1047,7 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   specialtyOption: {
+    minHeight: 48,
     paddingVertical: 12,
     paddingHorizontal: 10,
     borderRadius: 10,
@@ -1051,10 +1055,14 @@ const styles = StyleSheet.create({
     borderColor: '#F3F4F6',
     marginBottom: 8,
     backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
   },
   specialtyOptionText: {
     color: '#111827',
     fontWeight: '700',
+    flexShrink: 1,
+    fontSize: 14,
+    lineHeight: 18,
   },
   specialtyOptionTextActive: {
     color: GREEN,

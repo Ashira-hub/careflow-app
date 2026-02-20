@@ -54,11 +54,13 @@ type ScheduleSlot = {
 
 type DoctorOption = {
   id: string | number;
-  full_name: string;
+  name: string;
+  full_name?: string;
   specialty?: string;
 };
 
 type TabType = 'upcoming' | 'history';
+type UpcomingFilter = 'upcoming' | 'pending';
 
 // Bottom Navigation Item Component
 function BottomItem({
@@ -103,6 +105,8 @@ const PatientAppointment = () => {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [activeTab, setActiveTab] = useState<TabType>('upcoming');
+  const [upcomingFilter, setUpcomingFilter] =
+    useState<UpcomingFilter>('upcoming');
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedTime, setSelectedTime] = useState(new Date());
@@ -631,7 +635,7 @@ const PatientAppointment = () => {
         });
 
         const source = roleFiltered.length > 0 ? roleFiltered : list;
-        const options = source
+        const options: DoctorOption[] = source
           .map((u: any) => {
             const full_name = toFullName(u);
             const id = toId(u);
@@ -640,13 +644,12 @@ const PatientAppointment = () => {
               id != null && String(id).trim().length > 0 ? id : full_name;
             return {
               id: stableId,
+              name: full_name,
               full_name,
               specialty,
-            } as DoctorOption;
+            };
           })
-          .filter((x: DoctorOption) =>
-            Boolean(String(x.full_name || '').trim()),
-          );
+          .filter((x: DoctorOption) => Boolean(String(x.name || '').trim()));
 
         const byId = new Map<string, DoctorOption>();
         for (const opt of options) {
@@ -655,7 +658,7 @@ const PatientAppointment = () => {
         }
 
         let finalOptions = Array.from(byId.values()).sort((a, b) =>
-          String(a.full_name).localeCompare(String(b.full_name)),
+          String(a.name).localeCompare(String(b.name)),
         );
 
         // Backfill doctor specialties if the list endpoint didn't include it
@@ -1190,9 +1193,7 @@ const PatientAppointment = () => {
   const filteredAppointments = useMemo(() => {
     const base = (appointments || []).filter(appointment => {
       return (
-        (activeTab === 'upcoming' &&
-          (appointment.status === 'upcoming' ||
-            appointment.status === 'pending')) ||
+        (activeTab === 'upcoming' && appointment.status === upcomingFilter) ||
         (activeTab === 'history' && appointment.status === 'completed')
       );
     });
@@ -1216,14 +1217,14 @@ const PatientAppointment = () => {
     };
 
     if (activeTab === 'upcoming') {
-      // nearest upcoming/pending first
+      // latest first
       return [...base].sort((a, b) => {
         const ta = toTs(a);
         const tb = toTs(b);
         if (ta == null && tb == null) return 0;
         if (ta == null) return 1;
         if (tb == null) return -1;
-        return ta - tb;
+        return tb - ta;
       });
     }
 
@@ -1236,7 +1237,7 @@ const PatientAppointment = () => {
       if (tb == null) return -1;
       return tb - ta;
     });
-  }, [activeTab, appointments, time12ToMinutes]);
+  }, [activeTab, appointments, time12ToMinutes, upcomingFilter]);
 
   const openReminder = (item: Appointment) => {
     setRemTarget({ id: item.id, date: item.date, time: item.time });
@@ -1689,6 +1690,46 @@ const PatientAppointment = () => {
           </TouchableOpacity>
         </View>
 
+        {activeTab === 'upcoming' && (
+          <View style={styles.apptFilterRow}>
+            <TouchableOpacity
+              style={[
+                styles.apptFilterPill,
+                upcomingFilter === 'upcoming' && styles.apptFilterPillActive,
+              ]}
+              activeOpacity={0.85}
+              onPress={() => setUpcomingFilter('upcoming')}
+            >
+              <Text
+                style={[
+                  styles.apptFilterText,
+                  upcomingFilter === 'upcoming' && styles.apptFilterTextActive,
+                ]}
+              >
+                Upcoming
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.apptFilterPill,
+                upcomingFilter === 'pending' && styles.apptFilterPillActive,
+              ]}
+              activeOpacity={0.85}
+              onPress={() => setUpcomingFilter('pending')}
+            >
+              <Text
+                style={[
+                  styles.apptFilterText,
+                  upcomingFilter === 'pending' && styles.apptFilterTextActive,
+                ]}
+              >
+                Pending
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Appointment List */}
         <FlatList
           style={{ flex: 1 }}
@@ -1867,7 +1908,9 @@ const PatientAppointment = () => {
         onRequestClose={() => setShowSpecializationPicker(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { maxHeight: '70%' }]}>
+          <View
+            style={[styles.specializationModalContent, { maxHeight: '70%' }]}
+          >
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Select Specialization</Text>
               <TouchableOpacity
@@ -1876,10 +1919,13 @@ const PatientAppointment = () => {
                 <Text style={styles.closeButton}>×</Text>
               </TouchableOpacity>
             </View>
-            <View style={styles.modalBody}>
+            <View style={styles.specializationModalBody}>
               <FlatList
                 data={specializationOptions}
                 keyExtractor={item => String(item)}
+                style={{ flex: 1 }}
+                contentContainerStyle={{ paddingBottom: 24 }}
+                ListFooterComponent={<View style={{ height: 24 }} />}
                 renderItem={({ item }) => (
                   <TouchableOpacity
                     style={styles.doctorPickerItem}
@@ -1893,7 +1939,11 @@ const PatientAppointment = () => {
                       setShowSpecializationPicker(false);
                     }}
                   >
-                    <Text style={styles.doctorPickerItemText}>
+                    <Text
+                      style={styles.doctorPickerItemText}
+                      numberOfLines={2}
+                      ellipsizeMode="tail"
+                    >
                       {String(item)}
                     </Text>
                   </TouchableOpacity>
@@ -2110,7 +2160,7 @@ const PatientAppointment = () => {
                       style={styles.doctorPickerItem}
                       activeOpacity={0.8}
                       onPress={() => {
-                        setDoctor(String(item.full_name || ''));
+                        setDoctor(String(item.full_name || item.name || ''));
                         setDoctorUserId(item.id);
                         setSelectedSchedule(null);
                         setScheduleSlots([]);
@@ -2118,7 +2168,7 @@ const PatientAppointment = () => {
                       }}
                     >
                       <Text style={styles.doctorPickerItemText}>
-                        {String(item.full_name || '')}
+                        {String(item.full_name || item.name || '')}
                       </Text>
                     </TouchableOpacity>
                   )}
@@ -2750,6 +2800,32 @@ const styles = StyleSheet.create({
     gap: 12,
     marginBottom: 20,
   },
+  apptFilterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+  },
+  apptFilterPill: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  apptFilterPillActive: {
+    backgroundColor: '#10B981',
+    borderColor: '#10B981',
+  },
+  apptFilterText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#6B7280',
+  },
+  apptFilterTextActive: {
+    color: '#FFFFFF',
+  },
   tabContainer: {
     flex: 1,
     flexDirection: 'row',
@@ -3053,6 +3129,18 @@ const styles = StyleSheet.create({
   modalBody: {
     padding: 16,
   },
+  specializationModalContent: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    width: '90%',
+    maxHeight: '80%',
+    minHeight: 260,
+    overflow: 'hidden',
+  },
+  specializationModalBody: {
+    flex: 1,
+    padding: 16,
+  },
   modalFooter: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
@@ -3124,13 +3212,17 @@ const styles = StyleSheet.create({
     tintColor: '#111827',
   },
   doctorPickerItem: {
+    minHeight: 48,
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0',
+    justifyContent: 'center',
   },
   doctorPickerItemText: {
     fontSize: 14,
     color: '#111827',
+    lineHeight: 18,
+    flexShrink: 1,
   },
   schedulePickerItem: {
     paddingVertical: 12,

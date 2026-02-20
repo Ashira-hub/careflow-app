@@ -182,6 +182,14 @@ const PatientPrescription = () => {
   const ViewShotComponent: any =
     (viewShotModule as any)?.default ?? (viewShotModule as any)?.ViewShot;
 
+  const resolveDefaultExport = React.useCallback((m: any) => {
+    try {
+      return (m as any)?.default ?? m;
+    } catch {
+      return m;
+    }
+  }, []);
+
   const PreviewShotWrapper = React.useCallback(
     ({ children }: { children: React.ReactNode }) => {
       if (ViewShotComponent) {
@@ -735,10 +743,10 @@ const PatientPrescription = () => {
       let RNHTMLtoPDF: any;
       let RNPrint: any;
       try {
-        RNHTMLtoPDF = require('react-native-html-to-pdf');
+        RNHTMLtoPDF = resolveDefaultExport(require('react-native-html-to-pdf'));
       } catch {}
       try {
-        RNPrint = require('react-native-print');
+        RNPrint = resolveDefaultExport(require('react-native-print'));
       } catch {}
 
       const html = `
@@ -812,7 +820,7 @@ const PatientPrescription = () => {
 
       let RNHTMLtoPDF: any;
       try {
-        RNHTMLtoPDF = require('react-native-html-to-pdf');
+        RNHTMLtoPDF = resolveDefaultExport(require('react-native-html-to-pdf'));
       } catch {
         // Fallback: Create a text representation of prescriptions
         const lines = (list || []).map((p, i) => {
@@ -1091,10 +1099,12 @@ const PatientPrescription = () => {
         let RNHTMLtoPDF: any;
         let RNPrint: any;
         try {
-          RNHTMLtoPDF = require('react-native-html-to-pdf');
+          RNHTMLtoPDF = resolveDefaultExport(
+            require('react-native-html-to-pdf'),
+          );
         } catch {}
         try {
-          RNPrint = require('react-native-print');
+          RNPrint = resolveDefaultExport(require('react-native-print'));
         } catch {}
 
         if (RNHTMLtoPDF?.convert) {
@@ -1128,7 +1138,7 @@ const PatientPrescription = () => {
 
         let ExpoPrint: any;
         try {
-          ExpoPrint = require('expo-print');
+          ExpoPrint = resolveDefaultExport(require('expo-print'));
         } catch {}
 
         if (ExpoPrint?.printToFileAsync) {
@@ -1423,7 +1433,7 @@ const PatientPrescription = () => {
         const tb = Date.parse(b.date || '') || 0;
         return tb - ta;
       });
-      setList(mapped);
+      setList(mapped.filter(p => p?.status === 'pending'));
     } catch {}
   }, [getAuthHeaders, getCurrentUserName]);
 
@@ -1624,7 +1634,7 @@ const PatientPrescription = () => {
 
       let RNHTMLtoPDF: any;
       try {
-        RNHTMLtoPDF = require('react-native-html-to-pdf');
+        RNHTMLtoPDF = resolveDefaultExport(require('react-native-html-to-pdf'));
       } catch {
         const lines = (items || []).map(
           (l, i) =>
@@ -2093,13 +2103,28 @@ const PatientPrescription = () => {
                           </View>
 
                           <View style={styles.previewRxHeaderTitleCell}>
-                            <Text style={styles.previewRxHeaderSchool}>
+                            <Text
+                              style={styles.previewRxHeaderSchool}
+                              numberOfLines={1}
+                              adjustsFontSizeToFit
+                              minimumFontScale={0.8}
+                            >
                               Careflow
                             </Text>
-                            <Text style={styles.previewRxHeaderSubject}>
+                            <Text
+                              style={styles.previewRxHeaderSubject}
+                              numberOfLines={1}
+                              adjustsFontSizeToFit
+                              minimumFontScale={0.8}
+                            >
                               Subject
                             </Text>
-                            <Text style={styles.previewRxHeaderFormTitle}>
+                            <Text
+                              style={styles.previewRxHeaderFormTitle}
+                              numberOfLines={2}
+                              adjustsFontSizeToFit
+                              minimumFontScale={0.75}
+                            >
                               LABORATORY REQUEST FORM
                             </Text>
                           </View>
@@ -2228,13 +2253,28 @@ const PatientPrescription = () => {
                           </View>
 
                           <View style={styles.previewRxHeaderTitleCell}>
-                            <Text style={styles.previewRxHeaderSchool}>
+                            <Text
+                              style={styles.previewRxHeaderSchool}
+                              numberOfLines={1}
+                              adjustsFontSizeToFit
+                              minimumFontScale={0.8}
+                            >
                               Careflow
                             </Text>
-                            <Text style={styles.previewRxHeaderSubject}>
+                            <Text
+                              style={styles.previewRxHeaderSubject}
+                              numberOfLines={1}
+                              adjustsFontSizeToFit
+                              minimumFontScale={0.8}
+                            >
                               Subject
                             </Text>
-                            <Text style={styles.previewRxHeaderFormTitle}>
+                            <Text
+                              style={styles.previewRxHeaderFormTitle}
+                              numberOfLines={2}
+                              adjustsFontSizeToFit
+                              minimumFontScale={0.75}
+                            >
                               PRESCRIPTION FORM
                             </Text>
                           </View>
@@ -2414,13 +2454,28 @@ const PatientPrescription = () => {
                           </View>
 
                           <View style={styles.previewRxHeaderTitleCell}>
-                            <Text style={styles.previewRxHeaderSchool}>
+                            <Text
+                              style={styles.previewRxHeaderSchool}
+                              numberOfLines={1}
+                              adjustsFontSizeToFit
+                              minimumFontScale={0.8}
+                            >
                               Careflow
                             </Text>
-                            <Text style={styles.previewRxHeaderSubject}>
+                            <Text
+                              style={styles.previewRxHeaderSubject}
+                              numberOfLines={1}
+                              adjustsFontSizeToFit
+                              minimumFontScale={0.8}
+                            >
                               Subject
                             </Text>
-                            <Text style={styles.previewRxHeaderFormTitle}>
+                            <Text
+                              style={styles.previewRxHeaderFormTitle}
+                              numberOfLines={2}
+                              adjustsFontSizeToFit
+                              minimumFontScale={0.75}
+                            >
                               PRESCRIPTION FORM
                             </Text>
                           </View>
@@ -2819,7 +2874,9 @@ const PatientPrescription = () => {
 
                       let RNHTMLtoPDF: any;
                       try {
-                        RNHTMLtoPDF = require('react-native-html-to-pdf');
+                        RNHTMLtoPDF = resolveDefaultExport(
+                          require('react-native-html-to-pdf'),
+                        );
                       } catch {
                         const lines = (items || []).map(
                           (l, i) =>
@@ -3372,8 +3429,8 @@ const styles = StyleSheet.create({
     borderColor: '#111827',
   },
   previewRxHeaderLogoCell: {
-    width: 64,
-    paddingVertical: 10,
+    width: 56,
+    paddingVertical: 8,
     alignItems: 'center',
     justifyContent: 'center',
     borderRightWidth: 1,
@@ -3393,38 +3450,42 @@ const styles = StyleSheet.create({
   },
   previewRxHeaderTitleCell: {
     flex: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
     borderRightWidth: 1,
     borderRightColor: '#111827',
     alignItems: 'center',
     justifyContent: 'center',
   },
   previewRxHeaderSchool: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
     color: '#111827',
     textAlign: 'center',
-    lineHeight: 14,
+    lineHeight: 13,
+    includeFontPadding: false,
   },
   previewRxHeaderSubject: {
     marginTop: 2,
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '600',
     color: '#111827',
-    alignSelf: 'flex-start',
+    textAlign: 'center',
+    includeFontPadding: false,
   },
   previewRxHeaderFormTitle: {
     marginTop: 4,
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '900',
     color: '#111827',
     textAlign: 'center',
+    lineHeight: 14,
+    includeFontPadding: false,
   },
   previewRxHeaderDocCell: {
-    width: 160,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
+    width: 140,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
   },
   previewRxHeaderDocRow: {
     flexDirection: 'row',
@@ -3432,18 +3493,20 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   previewRxHeaderDocLabel: {
-    fontSize: 9,
+    fontSize: 8,
     fontWeight: '800',
     color: '#111827',
     marginRight: 6,
     flexShrink: 1,
+    includeFontPadding: false,
   },
   previewRxHeaderDocValue: {
-    fontSize: 9,
+    fontSize: 8,
     fontWeight: '700',
     color: '#111827',
     textAlign: 'right',
     flexShrink: 0,
+    includeFontPadding: false,
   },
   previewRxInfo: {
     marginTop: 12,
