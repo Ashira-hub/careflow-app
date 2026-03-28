@@ -18,6 +18,7 @@ import {
   getLastVisitString,
 } from '../../state/patient_records_store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Config from 'react-native-config';
 import DoctorTopNav from './DoctorTopNav';
 
 const GREEN = '#10B981';
@@ -36,7 +37,9 @@ export default function DoctorPatientRecords() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
 
-  const API_BASE = 'https://backend-careflow.vercel.app';
+  const API_BASE =
+    (Config.API_BASE_URL as string | undefined) ||
+    'https://backend-careflow.vercel.app';
   const getAuthHeaders = React.useCallback(async () => {
     try {
       const raw = await AsyncStorage.getItem('session');
@@ -62,32 +65,63 @@ export default function DoctorPatientRecords() {
       (async () => {
         try {
           const headers = await getAuthHeaders();
-          const res = await fetch(`${API_BASE}/api/patient-records?own=1`, {
+          const res = await fetch(`${API_BASE}/api/patient-records/all`, {
             headers,
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const rows = await res.json();
-          // rows: [{ patient, last_ts }]
-          const mapped: Patient[] = (Array.isArray(rows) ? rows : []).map(
-            (r: any) => {
-              const ts = r?.last_ts ? Date.parse(r.last_ts) : Date.now();
-              const rec: PatientRecord = {
-                id: `PR-${r.patient}`,
-                name: String(r.patient || ''),
-                appointments: [
-                  {
-                    date: '',
-                    time: '',
-                    notes: undefined,
-                    createdAt: isNaN(ts) ? Date.now() : ts,
-                  },
-                ],
+
+          const prRows: any[] = Array.isArray(rows) ? rows : [];
+          const byPatient: Record<string, PatientRecord> = {};
+
+          for (const r of prRows) {
+            const patientName = String(r?.patient || '').trim();
+            if (!patientName) continue;
+
+            const key = patientName.toLowerCase();
+            if (!byPatient[key]) {
+              byPatient[key] = {
+                id: `PR-${patientName}`,
+                name: patientName,
+                appointments: [],
                 prescriptions: [],
               };
-              return rec;
-            },
-          );
-          setRecords(mapped);
+            }
+
+            const createdAt = r?.created_at
+              ? Date.parse(String(r.created_at))
+              : Date.now();
+            const safeCreatedAt = Number.isFinite(createdAt)
+              ? createdAt
+              : Date.now();
+
+            const hasMedicine =
+              r?.medicine != null && String(r.medicine).trim().length > 0;
+
+            if (hasMedicine) {
+              byPatient[key].prescriptions.push({
+                medicine: String(r.medicine || ''),
+                dosage: r?.dosage != null ? String(r.dosage) : undefined,
+                instructions:
+                  r?.notes != null && String(r.notes).trim().length > 0
+                    ? String(r.notes)
+                    : undefined,
+                createdAt: safeCreatedAt,
+              } as any);
+            } else {
+              byPatient[key].appointments.push({
+                date: r?.date != null ? String(r.date) : '',
+                time: r?.time != null ? String(r.time) : '',
+                notes:
+                  r?.notes != null && String(r.notes).trim().length > 0
+                    ? String(r.notes)
+                    : undefined,
+                createdAt: safeCreatedAt,
+              });
+            }
+          }
+
+          setRecords(Object.values(byPatient));
         } catch {
           // Fallback to in-memory store to avoid empty list if offline
           try {
@@ -115,31 +149,63 @@ export default function DoctorPatientRecords() {
     setRefreshing(true);
     try {
       const headers = await getAuthHeaders();
-      const res = await fetch(`${API_BASE}/api/patient-records?own=1`, {
+      const res = await fetch(`${API_BASE}/api/patient-records/all`, {
         headers,
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const rows = await res.json();
-      const mapped: Patient[] = (Array.isArray(rows) ? rows : []).map(
-        (r: any) => {
-          const ts = r?.last_ts ? Date.parse(r.last_ts) : Date.now();
-          const rec: PatientRecord = {
-            id: `PR-${r.patient}`,
-            name: String(r.patient || ''),
-            appointments: [
-              {
-                date: '',
-                time: '',
-                notes: undefined,
-                createdAt: isNaN(ts) ? Date.now() : ts,
-              },
-            ],
+
+      const prRows: any[] = Array.isArray(rows) ? rows : [];
+      const byPatient: Record<string, PatientRecord> = {};
+
+      for (const r of prRows) {
+        const patientName = String(r?.patient || '').trim();
+        if (!patientName) continue;
+
+        const key = patientName.toLowerCase();
+        if (!byPatient[key]) {
+          byPatient[key] = {
+            id: `PR-${patientName}`,
+            name: patientName,
+            appointments: [],
             prescriptions: [],
           };
-          return rec;
-        },
-      );
-      setRecords(mapped);
+        }
+
+        const createdAt = r?.created_at
+          ? Date.parse(String(r.created_at))
+          : Date.now();
+        const safeCreatedAt = Number.isFinite(createdAt)
+          ? createdAt
+          : Date.now();
+
+        const hasMedicine =
+          r?.medicine != null && String(r.medicine).trim().length > 0;
+
+        if (hasMedicine) {
+          byPatient[key].prescriptions.push({
+            medicine: String(r.medicine || ''),
+            dosage: r?.dosage != null ? String(r.dosage) : undefined,
+            instructions:
+              r?.notes != null && String(r.notes).trim().length > 0
+                ? String(r.notes)
+                : undefined,
+            createdAt: safeCreatedAt,
+          } as any);
+        } else {
+          byPatient[key].appointments.push({
+            date: r?.date != null ? String(r.date) : '',
+            time: r?.time != null ? String(r.time) : '',
+            notes:
+              r?.notes != null && String(r.notes).trim().length > 0
+                ? String(r.notes)
+                : undefined,
+            createdAt: safeCreatedAt,
+          });
+        }
+      }
+
+      setRecords(Object.values(byPatient));
     } catch {
       try {
         setRecords(getRecords());

@@ -16,6 +16,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../navigation/types';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Config from 'react-native-config';
 
 type RecordType =
   | 'all'
@@ -85,7 +86,9 @@ const PatientRecords = () => {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [filterMenuVisible, setFilterMenuVisible] = useState(false);
 
-  const API_BASE = 'https://backend-careflow.vercel.app';
+  const API_BASE =
+    (Config.API_BASE_URL as string | undefined) ||
+    'https://backend-careflow.vercel.app';
   const getAuthHeaders = React.useCallback(async () => {
     try {
       const raw = await AsyncStorage.getItem('session');
@@ -410,24 +413,33 @@ const PatientRecords = () => {
         return false;
       };
 
-      const [resPR, labData] = await Promise.all([
-        fetch(`${API_BASE}/api/patient-records/all`, { headers }),
+      const [prData, labTestsData, labRecordsData] = await Promise.all([
+        fetchFirstOk(['/api/patient-records/all', '/api/patient-records']),
         fetchFirstOk([
           '/api/lab-tests',
           '/api/lab_tests',
           '/api/lab-tests/all',
           '/api/lab_tests/all',
+        ]),
+        fetchFirstOk([
           '/api/lab-records',
+          '/api/lab_records',
+          '/api/lab-records/all',
         ]),
       ]);
 
-      const prRows = resPR.ok ? await resPR.json() : [];
-      const labRows = normalizeRows(labData);
+      const prRows = normalizeRows(prData);
+      const labTestRows = normalizeRows(labTestsData);
+      const labRecordRows = normalizeRows(labRecordsData);
+      const labRows = [...labTestRows, ...labRecordRows];
       // Also fetch prescriptions so completed (accepted) ones appear in records
       let rxRows: any[] = [];
       try {
-        const resRx = await fetch(`${API_BASE}/api/prescriptions`, { headers });
-        rxRows = resRx.ok ? await resRx.json() : [];
+        const rxData = await fetchFirstOk([
+          '/api/prescriptions',
+          '/api/prescription',
+        ]);
+        rxRows = normalizeRows(rxData);
       } catch {}
 
       // Fetch appointments so completed ones also appear in records
@@ -439,26 +451,21 @@ const PatientRecords = () => {
         apptRows = resAppt.ok ? await resAppt.json() : [];
       } catch {}
 
+      const myNameSafe = String(myName || '').trim();
       const minePR = (Array.isArray(prRows) ? prRows : []).filter((r: any) =>
-        nameMatches(String(r?.patient || ''), String(myName || '')),
+        myNameSafe ? nameMatches(String(r?.patient || ''), myNameSafe) : true,
       );
-      const mineLab = (Array.isArray(labRows) ? labRows : []).filter(
-        (r: any) => {
-          const pname =
-            r?.patient ||
-            r?.patient_name ||
-            r?.patientName ||
-            r?.patient_fullname;
-          return nameMatches(String(pname || ''), String(myName || ''));
-        },
-      );
+      const mineLab = Array.isArray(labRows) ? labRows : [];
       const mineRx = (Array.isArray(rxRows) ? rxRows : []).filter((r: any) =>
-        nameMatches(String(r?.patient_name || ''), String(myName || '')),
+        myNameSafe
+          ? nameMatches(String(r?.patient_name || ''), myNameSafe)
+          : true,
       );
       const mineAppt = (Array.isArray(apptRows) ? apptRows : []).filter(
         (a: any) =>
-          nameMatches(String(a?.patient || ''), String(myName || '')) &&
-          Boolean(a?.done),
+          (myNameSafe
+            ? nameMatches(String(a?.patient || ''), myNameSafe)
+            : true) && Boolean(a?.done),
       );
 
       const mappedPR: MedicalRecord[] = minePR.map((r: any) => {
@@ -487,32 +494,68 @@ const PatientRecords = () => {
         };
       });
 
-      const mappedLab: MedicalRecord[] = mineLab.map((r: any) => {
-        const testName =
-          r?.test_name || r?.testName || r?.test || r?.lab_test || r?.labTest;
-        const title = testName
-          ? `Lab Result - ${String(testName)}`
-          : 'Lab Result';
-        const date = String(r?.date || r?.createdAt || r?.created_at || '');
-        const statRaw = String(r?.status || '').toLowerCase();
-        const status: 'pending' | 'completed' | 'cancelled' | undefined =
-          statRaw === 'completed' || statRaw === 'done'
-            ? 'completed'
-            : statRaw === 'pending'
-            ? 'pending'
-            : statRaw === 'cancelled'
-            ? 'cancelled'
-            : undefined;
-        return {
-          id: `LAB-${String(r?.id || `${r?.patient || ''}-${date}`)}`,
-          title,
-          type: 'lab_result',
-          date,
-          doctor: undefined,
-          status,
-          notes: buildLabNotes(r),
-        };
-      });
+      const mappedLab: MedicalRecord[] = mineLab
+        .map((r: any) => {
+          const testName =
+            r?.test_name || r?.testName || r?.test || r?.lab_test || r?.labTest;
+          const title = testName
+            ? `Lab Result - ${String(testName)}`
+            : 'Lab Result';
+          const date = String(r?.date || r?.createdAt || r?.created_at || '');
+          const statRaw = String(r?.status || '')
+            .trim()
+            .toLowerCase();
+          const doneFlag =
+            Boolean(r?.done) ||
+            Boolean(r?.is_done) ||
+            Boolean(r?.isDone) ||
+            Boolean(r?.completed) ||
+            Boolean(r?.is_completed) ||
+            Boolean(r?.isCompleted);
+          const hasResultPayload = Boolean(
+            String(r?.result || r?.findings || r?.outcome || '').trim() ||
+              String(r?.notes || r?.remarks || r?.description || '').trim(),
+          );
+          const isCompleted =
+            doneFlag ||
+            (!statRaw && hasResultPayload) ||
+            statRaw === 'completed' ||
+            statRaw === 'done' ||
+            statRaw === 'finish' ||
+            statRaw === 'finished' ||
+            statRaw === 'final' ||
+            statRaw === 'finalized' ||
+            statRaw === 'released' ||
+            statRaw === 'result-released' ||
+            statRaw === 'result_released' ||
+            statRaw === 'approved' ||
+            statRaw === 'verified';
+          const status: 'pending' | 'completed' | 'cancelled' | undefined =
+            isCompleted
+              ? 'completed'
+              : statRaw === 'pending'
+              ? 'pending'
+              : statRaw === 'cancelled'
+              ? 'cancelled'
+              : undefined;
+          return {
+            id: `LAB-${String(r?.id || `${r?.patient || ''}-${date}`)}`,
+            title,
+            type: 'lab_result' as const,
+            date,
+            doctor: undefined,
+            status,
+            notes: buildLabNotes(r),
+          };
+        })
+        .filter(r => r.status === 'completed')
+        .reduce((acc: MedicalRecord[], cur) => {
+          // Deduplicate between lab_tests and lab_records
+          const key = `${cur.title}|${cur.date}`;
+          if (acc.some(r => `${r.title}|${r.date}` === key)) return acc;
+          acc.push(cur);
+          return acc;
+        }, []);
 
       // Map prescriptions (treat 'accepted' as completed)
       const mappedRx: MedicalRecord[] = mineRx

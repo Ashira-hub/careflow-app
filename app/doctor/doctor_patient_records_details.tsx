@@ -15,12 +15,8 @@ import {
   useRoute,
   useFocusEffect,
 } from '@react-navigation/native';
-import {
-  getRecords,
-  getLastVisitString,
-  PatientRecord,
-} from '../../state/patient_records_store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Config from 'react-native-config';
 import DoctorTopNav from './DoctorTopNav';
 
 const GREEN = '#10B981';
@@ -30,6 +26,29 @@ const CARD_BG = '#F9FAFB';
 
 type RouteParams = { patientName?: string };
 
+type AppointmentEntry = {
+  date: string;
+  time: string;
+  notes?: string;
+  createdAt: number;
+};
+
+type PrescriptionEntry = {
+  doctorName: string;
+  subject: string;
+  quantity: string;
+  dosageStrength: string;
+  description: string;
+  submittedAt: number;
+};
+
+type PatientRecord = {
+  id: string;
+  name: string;
+  appointments: AppointmentEntry[];
+  prescriptions: PrescriptionEntry[];
+};
+
 export default function DoctorPatientRecordsDetails() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
@@ -38,6 +57,118 @@ export default function DoctorPatientRecordsDetails() {
   const [showProfileMenu, setShowProfileMenu] = React.useState(false);
   const [unreadCount, setUnreadCount] = React.useState(0);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [record, setRecord] = React.useState<PatientRecord | null>(null);
+
+  const API_BASE =
+    (Config.API_BASE_URL as string | undefined) ||
+    'https://backend-careflow.vercel.app';
+  const getAuthHeaders = React.useCallback(async () => {
+    try {
+      const raw = await AsyncStorage.getItem('session');
+      const base = { 'Content-Type': 'application/json' } as Record<
+        string,
+        string
+      >;
+      if (!raw) return base;
+      const sess = JSON.parse(raw);
+      const token = sess?.token || sess?.user?.token || sess?.accessToken;
+      const userId = sess?.user?.id || sess?.id;
+      const withAuth = token
+        ? { ...base, Authorization: `Bearer ${token}` }
+        : base;
+      return userId ? { ...withAuth, 'X-User-Id': String(userId) } : withAuth;
+    } catch {
+      return { 'Content-Type': 'application/json' } as Record<string, string>;
+    }
+  }, []);
+
+  const nameMatches = React.useCallback((pRaw: string, meRaw: string) => {
+    const p = String(pRaw || '')
+      .toLowerCase()
+      .trim();
+    const me = String(meRaw || '')
+      .toLowerCase()
+      .trim();
+    if (!p || !me) return false;
+    if (p === me) return true;
+    const meTokens = me.split(/\s+/).filter(Boolean);
+    if (meTokens.length > 0 && meTokens.every(t => p.includes(t))) return true;
+    const pTokens = p.split(/\s+/).filter(Boolean);
+    if (pTokens.length > 0 && pTokens.every(t => me.includes(t))) return true;
+    return false;
+  }, []);
+
+  const getLastVisitStringLocal = React.useCallback((rec: PatientRecord) => {
+    const latestAppt = rec.appointments[0]?.createdAt ?? 0;
+    const latestRx = rec.prescriptions[0]?.submittedAt ?? 0;
+    const ts = Math.max(latestAppt, latestRx);
+    if (!ts) return '—';
+    const d = new Date(ts);
+    const opts: Intl.DateTimeFormatOptions = {
+      month: 'short',
+      day: '2-digit',
+      year: 'numeric',
+    };
+    return d.toLocaleDateString(undefined, opts);
+  }, []);
+
+  const loadRecord = React.useCallback(async () => {
+    const targetName = String(patientName || '').trim();
+    if (!targetName) {
+      setRecord(null);
+      return;
+    }
+    const headers = await getAuthHeaders();
+    const res = await fetch(`${API_BASE}/api/patient-records/all`, { headers });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const rows = await res.json();
+    const prRows: any[] = Array.isArray(rows) ? rows : [];
+
+    const mine = prRows.filter(r =>
+      nameMatches(String(r?.patient || ''), targetName),
+    );
+
+    const rec: PatientRecord = {
+      id: `PR-${targetName}`,
+      name: targetName,
+      appointments: [],
+      prescriptions: [],
+    };
+
+    for (const r of mine) {
+      const createdAtRaw = r?.created_at
+        ? Date.parse(String(r.created_at))
+        : NaN;
+      const safeTs = Number.isFinite(createdAtRaw) ? createdAtRaw : Date.now();
+      const hasMedicine =
+        r?.medicine != null && String(r.medicine).trim().length > 0;
+
+      if (hasMedicine) {
+        rec.prescriptions.push({
+          doctorName: r?.doctor != null ? String(r.doctor) : '',
+          subject: String(r?.medicine || ''),
+          quantity: '',
+          dosageStrength: r?.dosage != null ? String(r.dosage) : '',
+          description: r?.notes != null ? String(r.notes) : '',
+          submittedAt: safeTs,
+        });
+      } else {
+        rec.appointments.push({
+          date: r?.date != null ? String(r.date) : '',
+          time: r?.time != null ? String(r.time) : '',
+          notes: r?.notes != null ? String(r.notes) : undefined,
+          createdAt: safeTs,
+        });
+      }
+    }
+
+    rec.appointments.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    rec.prescriptions.sort(
+      (a, b) => (b.submittedAt || 0) - (a.submittedAt || 0),
+    );
+
+    setRecord(rec);
+  }, [API_BASE, getAuthHeaders, nameMatches, patientName]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -52,9 +183,15 @@ export default function DoctorPatientRecordsDetails() {
         } catch {
           setUnreadCount(0);
         }
+
+        try {
+          await loadRecord();
+        } catch {
+          setRecord(null);
+        }
       })();
       return () => {};
-    }, []),
+    }, [loadRecord]),
   );
 
   const onRefresh = React.useCallback(async () => {
@@ -70,15 +207,16 @@ export default function DoctorPatientRecordsDetails() {
       } catch {
         setUnreadCount(0);
       }
+
+      try {
+        await loadRecord();
+      } catch {
+        setRecord(null);
+      }
     } finally {
       setRefreshing(false);
     }
-  }, []);
-
-  const record: PatientRecord | undefined = React.useMemo(() => {
-    const name = (patientName || '').trim().toLowerCase();
-    return getRecords().find(r => r.name.toLowerCase() === name);
-  }, [patientName]);
+  }, [loadRecord]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -115,7 +253,7 @@ export default function DoctorPatientRecordsDetails() {
                 {record?.name || patientName || 'Unknown Patient'}
               </Text>
               <Text style={styles.metaText}>
-                Recently added: {record ? getLastVisitString(record) : '—'}
+                Recently added: {record ? getLastVisitStringLocal(record) : '—'}
               </Text>
               <View style={styles.countRow}>
                 <Text style={styles.countText}>

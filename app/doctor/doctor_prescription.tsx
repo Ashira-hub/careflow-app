@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { addPrescription } from '../../state/patient_records_store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Config from 'react-native-config';
 import DoctorTopNav from './DoctorTopNav';
 
 const GREEN = '#10B981';
@@ -98,7 +99,9 @@ export default function DoctorPrescription() {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [patients, setPatients] = useState<string[]>([]);
   const [showPatientPicker, setShowPatientPicker] = useState(false);
-  const API_BASE = 'https://backend-careflow.vercel.app';
+  const API_BASE =
+    (Config.API_BASE_URL as string | undefined) ||
+    'https://backend-careflow.vercel.app';
   const [unreadCount, setUnreadCount] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -348,7 +351,7 @@ export default function DoctorPrescription() {
             notes: description,
             doctor: name,
             doctor_name: name,
-            status: 'new',
+            status: 'pending',
           });
         }
       } catch {}
@@ -363,7 +366,7 @@ export default function DoctorPrescription() {
           category: t.category,
           notes: description,
           doctor: name,
-          status: 'new',
+          status: 'pending',
           timestamp: Date.now(),
         }));
         const nextLab = [...orders, ...(Array.isArray(arrLab) ? arrLab : [])];

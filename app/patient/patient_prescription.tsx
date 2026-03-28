@@ -1406,10 +1406,12 @@ const PatientPrescription = () => {
             : r?.dosage
             ? String(r.dosage)
             : undefined,
-          instructions: r?.description
-            ? String(r.description)
+          instructions: r?.instruction
+            ? String(r.instruction)
             : r?.instructions
             ? String(r.instructions)
+            : r?.description
+            ? String(r.description)
             : undefined,
           date,
           doctor: r?.doctor_name ? String(r.doctor_name) : undefined,
@@ -1544,7 +1546,7 @@ const PatientPrescription = () => {
         const tb = Date.parse(b.date || '') || 0;
         return tb - ta;
       });
-      setLabList(mapped);
+      setLabList(mapped.filter(r => r?.status === 'pending'));
     } catch {}
   }, [getAuthHeaders, getCurrentUserId, getCurrentUserName]);
 
@@ -1732,33 +1734,6 @@ const PatientPrescription = () => {
           </View>
 
           <View style={styles.recordDivider} />
-
-          <Text style={styles.recordSectionLabel}>INSTRUCTIONS</Text>
-          <Text style={styles.recordSectionValue} numberOfLines={4}>
-            {String(rx.instructions || '—')}
-          </Text>
-
-          <View style={styles.recordTwoColRow}>
-            <View style={styles.recordTwoColItem}>
-              <Text style={styles.recordSectionLabel}>QUANTITY</Text>
-              <Text style={styles.recordTwoColValue} numberOfLines={1}>
-                {rx.quantity != null ? String(rx.quantity) : '—'}
-              </Text>
-            </View>
-            <View style={styles.recordTwoColItem}>
-              <Text style={styles.recordSectionLabel}>REFILLS</Text>
-              <Text style={styles.recordTwoColValue} numberOfLines={1}>
-                {'—'}
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.recordMetaBlock}>
-            <Text style={styles.recordSectionLabel}>EXPIRY DATE</Text>
-            <Text style={styles.recordMetaValue} numberOfLines={1}>
-              {'—'}
-            </Text>
-          </View>
 
           <View style={styles.recordMetaBlock}>
             <Text style={styles.recordSectionLabel}>PRESCRIBED BY</Text>

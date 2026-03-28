@@ -39,6 +39,7 @@ type Appointment = {
   time: string;
   status: 'pending' | 'upcoming' | 'completed' | 'cancelled';
   notes?: string;
+  createdAt?: string;
 };
 
 type ScheduleSlot = {
@@ -568,6 +569,7 @@ const PatientAppointment = () => {
             ? 'upcoming'
             : 'pending',
           notes: String(a?.notes || ''),
+          createdAt: String(a?.created_at || a?.createdAt || ''),
         }));
         setAppointments(mapped);
       } catch {
@@ -1200,17 +1202,54 @@ const PatientAppointment = () => {
 
     const toTs = (a: Appointment) => {
       try {
-        const [y, m, d] = String(a?.date || '')
-          .split('-')
-          .map(Number);
-        const mins = time12ToMinutes(String(a?.time || ''));
-        if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d))
+        const createdRaw = String((a as any)?.createdAt || '').trim();
+        if (createdRaw) {
+          const t = Date.parse(createdRaw);
+          if (Number.isFinite(t)) return t;
+        }
+
+        const rawDate = String(a?.date || '').trim();
+        const rawTime = String(a?.time || '').trim();
+
+        const parseYmdStartOfDay = (s: string) => {
+          const [y, m, d] = String(s || '')
+            .split('-')
+            .map(Number);
+          if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d))
+            return null;
+          return new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0).getTime();
+        };
+
+        const parseDateAny = (s: string) => {
+          const ymd = parseYmdStartOfDay(s);
+          if (ymd != null) return ymd;
+          const t = Date.parse(s);
+          return Number.isFinite(t) ? new Date(t).setHours(0, 0, 0, 0) : null;
+        };
+
+        const parseTimeAnyToMinutes = (s: string) => {
+          const t = String(s || '').trim();
+          if (!t) return null;
+
+          // Handle ranges like "10:00 AM - 10:30 AM" by taking the start time
+          const firstPart = t.split('-')[0]?.trim() || t;
+          const mins12 = time12ToMinutes(firstPart);
+          if (mins12 != null) return mins12;
+
+          // Handle 24h times like "14:30"
+          const m = firstPart.match(/\b(\d{1,2}):(\d{2})\b/);
+          if (m) {
+            const hh = Number(m[1]);
+            const mm = Number(m[2]);
+            if (Number.isFinite(hh) && Number.isFinite(mm)) return hh * 60 + mm;
+          }
           return null;
-        if (mins == null) return null;
-        return (
-          new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0).getTime() +
-          mins * 60 * 1000
-        );
+        };
+
+        const dayTs = parseDateAny(rawDate);
+        const mins = parseTimeAnyToMinutes(rawTime);
+        if (dayTs == null || mins == null) return null;
+        return dayTs + mins * 60 * 1000;
       } catch {
         return null;
       }

@@ -736,8 +736,12 @@ export default function PatientNotification() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        <View style={[styles.headerContainer, { paddingTop: insets.top }]}>
-          <Text style={styles.header}>Notifications</Text>
+        <View
+          style={[
+            styles.headerContainer,
+            { paddingTop: Math.max(0, (insets.top || 0) + 8) },
+          ]}
+        >
           <View style={styles.headerActions}>
             <TouchableOpacity
               style={styles.headerIconBtn}
@@ -807,6 +811,8 @@ export default function PatientNotification() {
             </TouchableOpacity>
           </View>
         </View>
+
+        <Text style={styles.pageTitle}>Notifications</Text>
 
         <View style={styles.body}>
           <FlatList
@@ -1114,17 +1120,20 @@ export default function PatientNotification() {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#F3F4F6' },
-  container: { flex: 1, padding: 16, backgroundColor: '#F3F4F6' },
+  container: { flex: 1, paddingHorizontal: 16, backgroundColor: '#F3F4F6' },
   headerContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     alignItems: 'center',
+    minHeight: 56,
+    paddingBottom: 8,
     marginBottom: 14,
   },
-  header: {
+  pageTitle: {
     fontSize: 24,
     fontWeight: 'bold',
     color: '#2d3748',
+    marginBottom: 12,
   },
   headerActions: {
     flexDirection: 'row',
